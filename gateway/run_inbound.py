@@ -1188,6 +1188,17 @@ class GatewayInboundMixin:
         if _admitted is None:
             return None
         event, source, is_internal = _admitted
+        # HERMES_FEISHU_CARD_COMMAND_CARD_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import install_feishu_command_card_adapter_methods as _hfc_install_command_cards
+            _hfc_install_command_cards(self, event=event)
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_COMMAND_CARD_PATCH_END
         # TERMINAL-DECLINE LATCH TEARDOWN. Deliberately placed AFTER admission,
         # not on the adapter's raw inbound: profile routing, the ignored-channel
         # guard, plugin hooks and user authorization all reject events above,
@@ -1202,6 +1213,26 @@ class GatewayInboundMixin:
             return _paused_notice
 
         _quick_key = self._session_key_for_source(source)
+        # HERMES_FEISHU_CARD_HFC_COMMAND_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import maintenance_admission_from_hermes_locals as _hfc_enforce_maintenance_admission
+            if await _hfc_enforce_maintenance_admission(locals()):
+                return None
+            from hermes_feishu_card.hook_runtime import handle_hfc_command_from_hermes_locals as _hfc_handle_command
+            _hfc_command_message_id = None
+            try:
+                _hfc_command_message_id = self._reply_anchor_for_event(event)
+            except Exception:
+                _hfc_command_message_id = getattr(event, "message_id", None)
+            if _hfc_handle_command({**locals(), "message_id": _hfc_command_message_id}):
+                return None
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_HFC_COMMAND_PATCH_END
         _reply = await self._hm_pending_reply_intercepts(event, source, _quick_key)
         if _reply is not None:
             return _reply

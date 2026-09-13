@@ -3810,6 +3810,25 @@ class BasePlatformAdapter(ABC):
                     len(text_content), event.source.chat_id)
         obligation_id = await self._record_delivery_obligation(
             event, session_key, text_content, delivery_adapter, is_ephemeral_response)
+        # HERMES_FEISHU_CARD_EXACT_BASE_FINAL_DELIVERY_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import prepare_decomposed_base_final_delivery as _hfc_prepare_exact_base_final_delivery
+            delivery_adapter, text_content, reply_to, metadata = await _hfc_prepare_exact_base_final_delivery({
+                **locals(),
+                "source": event.source,
+                "delivery_adapter": delivery_adapter,
+                "content": text_content,
+                "obligation_id": obligation_id,
+                "reply_to": reply_to,
+                "metadata": metadata,
+            })
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_EXACT_BASE_FINAL_DELIVERY_PATCH_END
         result = await delivery_adapter._send_with_retry(
             chat_id=event.source.chat_id, content=text_content, reply_to=reply_to, metadata=metadata)
         if obligation_id is not None:
@@ -4009,6 +4028,24 @@ class BasePlatformAdapter(ABC):
                 if not _tts_paths and _tts_requested_path is not None:
                     with contextlib.suppress(OSError):
                         os.remove(_tts_requested_path)
+                # HERMES_FEISHU_CARD_EXACT_BASE_NO_TEXT_PATCH_BEGIN
+                try:
+                    from hermes_feishu_card.hook_runtime import capture_decomposed_base_context as _hfc_capture_base
+                    images, local_files = extracted.images, extracted.local_files
+                    _hfc_capture_base(locals())
+                    from hermes_feishu_card.hook_runtime import finalize_exact_base_no_text as _hfc_finalize_exact_base_no_text
+                    if not text_content or _tts_caption_delivered:
+                        await _hfc_finalize_exact_base_no_text({
+                            **locals(),
+                            "source": event.source,
+                        })
+                except Exception as _hfc_exc:
+                    try:
+                        import sys as _hfc_sys
+                        print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+                    except Exception:
+                        pass
+                # HERMES_FEISHU_CARD_EXACT_BASE_NO_TEXT_PATCH_END
                 if text_content and not _tts_caption_delivered:
                     await self._send_final_text(
                         event, session_key, text_content, _final_thread_metadata,

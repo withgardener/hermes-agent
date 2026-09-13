@@ -519,6 +519,24 @@ class GatewayBusySessionMixin:
             redirected = self._try_agent_verb(
                 running_agent, "redirect", (event.text or "").strip(), session_key, event=event
             )
+        # HERMES_FEISHU_CARD_REDIRECT_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_async as _hfc_emit_async
+            if bool(locals().get("redirected")):
+                _hfc_redirect_message_id = str(getattr(event, "message_id", "") or "")
+                from hermes_feishu_card.hook_runtime import redirect_turn_id_for_agent as _hfc_redirect_turn
+                _hfc_redirect_from_turn_id = _hfc_redirect_turn(locals().get("running_agent"), event.source)
+                if _hfc_redirect_message_id and _hfc_redirect_from_turn_id:
+                    from copy import copy as _hfc_copy
+                    _hfc_redirect_source = _hfc_copy(event.source)
+                    await _hfc_emit_async({"source": _hfc_redirect_source, "event": event, "message": event, "chat_id": getattr(event.source, "chat_id", None), "message_id": _hfc_redirect_message_id, "reply_to_message_id": getattr(event, "reply_to_message_id", "") or _hfc_redirect_message_id, "redirect_from_turn_id": _hfc_redirect_from_turn_id, "redirect_followup": True}, event_name="message.started")
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_REDIRECT_PATCH_END
         return self._BusySteerOutcome(
             effective_mode=effective_mode, demoted_for_subagents=demoted_for_subagents,
             demoted_for_compression=demoted_for_compression, steered=steered, redirected=redirected,
@@ -1196,6 +1214,43 @@ class GatewayBusySessionMixin:
 
         # Register FIRST so a fast button click cannot race the send_slash_confirm return.
         _slash_confirm_mod.register(session_key, confirm_id, command, handler)
+        # HERMES_FEISHU_CARD_SLASH_CONFIRM_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import request_slash_confirm_from_hermes_locals_async as _hfc_request_slash_confirm
+            from hermes_feishu_card.hook_runtime import complete_command_card_from_hermes_locals_async as _hfc_complete_command_card
+            from hashlib import sha256 as _hfc_sha256
+            _hfc_slash_reply_to = None
+            try:
+                _hfc_slash_reply_to = self._reply_anchor_for_event(event)
+            except Exception:
+                _hfc_slash_reply_to = getattr(event, "message_id", None)
+            _hfc_slash_interaction_seed = (str(session_key) + ":" + str(confirm_id)).encode("utf-8")
+            _hfc_slash_interaction_id = "slash_" + _hfc_sha256(_hfc_slash_interaction_seed).hexdigest()[:16]
+            _hfc_slash_choice = await _hfc_request_slash_confirm({
+                **locals(),
+                "source": source,
+                "chat_id": getattr(source, "chat_id", ""),
+                "conversation_id": session_key,
+                "message_id": _hfc_slash_reply_to,
+                "reply_to_message_id": _hfc_slash_reply_to,
+            }, command=command, title=title, message=message, interaction_id=_hfc_slash_interaction_id)
+            if _hfc_slash_choice in {"once", "always", "cancel"}:
+                _hfc_slash_result = await handler(_hfc_slash_choice)
+                if await _hfc_complete_command_card({
+                    "source": source,
+                    "chat_id": getattr(source, "chat_id", ""),
+                    "conversation_id": session_key,
+                    "message_id": _hfc_slash_reply_to,
+                }, answer=_hfc_slash_result):
+                    return None
+                return _hfc_slash_result
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_SLASH_CONFIRM_PATCH_END
 
         adapter = self._adapter_for_source(source)
         metadata = self._thread_metadata_for_source(source, self._reply_anchor_for_event(event))

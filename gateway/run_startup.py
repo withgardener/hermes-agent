@@ -390,6 +390,24 @@ class GatewayStartupMixin:
                 content = row.get("marker", RECOVERED_MARKER) + content
             metadata = {"thread_id": row["thread_id"]} if row.get("thread_id") else None
             try:
+                # HERMES_FEISHU_CARD_NATIVE_REDELIVERY_PATCH_BEGIN
+                try:
+                    from hermes_feishu_card.hook_runtime import prepare_native_handoff_recovery as _hfc_prepare_native_handoff_recovery
+                    await _hfc_prepare_native_handoff_recovery(
+                        adapter=adapter,
+                        obligation_id=row.get("obligation_id"),
+                        chat_id=row.get("chat_id"),
+                        content=content,
+                        original_content=row.get("content"),
+                        thread_id=row.get("thread_id") or "",
+                    )
+                except Exception as _hfc_exc:
+                    try:
+                        import sys as _hfc_sys
+                        print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+                    except Exception:
+                        pass
+                # HERMES_FEISHU_CARD_NATIVE_REDELIVERY_PATCH_END
                 result = await adapter.send(chat_id=row["chat_id"], content=content, metadata=metadata)
             except Exception as send_err:
                 logger.warning("obligation %s: redelivery send raised: %s", row["obligation_id"], send_err)
@@ -1251,6 +1269,17 @@ class GatewayStartupMixin:
         # control sleep here once froze every platform).
         # Restart notification, home-channel startup notice, and obligation redelivery all call
         # adapter.send(). Bound them the same way _finish_startup_restore bounds resume turns. See #91969.
+        # HERMES_FEISHU_CARD_COMMAND_CARD_STARTUP_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import install_feishu_command_card_adapter_methods as _hfc_install_command_cards
+            _hfc_install_command_cards(self)
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_COMMAND_CARD_STARTUP_PATCH_END
         await self._await_startup_boot_sends(
             planned_restart_notification_pending=_planned_restart_notification_pending(),
         )

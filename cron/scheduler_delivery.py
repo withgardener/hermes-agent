@@ -1725,6 +1725,22 @@ def _deliver_result(
     media_files, cleaned_delivery_content = BasePlatformAdapter.extract_media(delivery_content)
     requested_media = len(media_files)
     media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
+    # HERMES_FEISHU_CARD_CRON_PATCH_BEGIN
+    try:
+        from hermes_feishu_card.hook_runtime import emit_cron_delivery as _hfc_emit_cron
+        _hfc_cron_metadata = {"delivery_kind": "cron"}
+        if _hfc_emit_cron({**locals(), "_hfc_resolved_targets": locals().get("targets", [])}):
+            if media_files:
+                cleaned_delivery_content = ""
+            else:
+                return None
+    except Exception as _hfc_exc:
+        try:
+            import sys as _hfc_sys
+            print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+        except Exception:
+            pass
+    # HERMES_FEISHU_CARD_CRON_PATCH_END
     # Policy-dropped attachments will never be sent on ANY lane — record them in run status.
     _policy_dropped = requested_media - len(media_files)
     policy_drop_errors = [
