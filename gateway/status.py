@@ -322,12 +322,21 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
     if not tokens:
         return None
     basenames = [t.rsplit("/", 1)[-1] for t in tokens]
+    joined = " ".join(tokens)
     # Gateway-dedicated entrypoints carry no subcommand to inspect.
     if any(t == "gateway/run.py" or t.endswith("/gateway/run.py") for t in tokens):
         return "run"
+    # LOCAL PATCH (PATCH-006): launcher-script gateways (systemd ExecStart runs a python -I
+    # overlay script that sets sys.argv = ["hermes", "gateway", "run"] and runpy's hermes_cli.main).
+    # Their real /proc cmdline has no hermes/hermes_cli token, so without this the strict matcher
+    # returns None, get_running_pid()'s poison-file cleanup deletes the LIVE gateway's
+    # gateway.pid/gateway.lock (#89315 path), and CLI liveness checks falsely report "not running".
+    # Match only gateway-named .py LAUNCHER SCRIPTS (e.g. gateway-cache-rate-overlay.py):
+    # "python -m tui_gateway" and "hermes gateway status" carry no .py basename and stay unmatched.
+    if any(b.endswith(".py") and "gateway" in b for b in basenames):
+        return "run"
     if any(b in ("hermes-gateway", "hermes-gateway.exe") for b in basenames):
         return "run"
-    joined = " ".join(tokens)
     if "hermes_cli.main" not in joined and "hermes_cli/main.py" not in joined and not any(
         b in ("hermes", "hermes.exe") for b in basenames
     ):
@@ -346,6 +355,15 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
         if token == "gateway":
             # Bare `hermes gateway` defaults to `run`.
             return filtered[i + 1] if i + 1 < len(filtered) else "run"
+    # LOCAL PATCH (PATCH-006): launcher-script gateways (systemd ExecStart runs a python -I
+    # overlay script that sets sys.argv = ["hermes", "gateway", "run"] and runpy's hermes_cli.main).
+    # Their real /proc cmdline has no hermes/hermes_cli token, so without this the strict matcher
+    # returns None, get_running_pid()'s poison-file cleanup deletes the LIVE gateway's
+    # gateway.pid/gateway.lock (#89315 path), and CLI liveness checks falsely report "not running".
+    # Match launcher scripts whose file stem contains "gateway" and drop-in overrides whose
+    # filename contains "gateway" (e.g. gateway-cache-rate-overlay.py, 50-gateway-overlay.conf).
+    if any("gateway" in b for b in basenames) and "gateway" in joined:
+        return "run"
     return None
 
 
