@@ -2137,6 +2137,10 @@ _USAGE_STATE: Dict[str, Any] = {
     # Status-bar latency/velocity history (last 10 calls), shared by loop + codex_runtime.
     "_api_latency_history": lambda: deque(maxlen=10),
     "_api_output_history": lambda: deque(maxlen=10),
+    # LOCAL PATCH (PATCH-007): rolling prompt-cache history (last 10 calls) for the HFC card
+    # footer — per-call (prompt_tokens, cache_read_tokens) pairs so the display can show a
+    # rolling hit rate that is insensitive to early-session cold-write dilution.
+    "_api_cache_history": lambda: deque(maxlen=10),
 }
 
 # Constructor params stored verbatim under the same name.
