@@ -1974,6 +1974,10 @@ class TurnRunner:
             usage["cache_read_tokens"] = getattr(agent, "session_cache_read_tokens", 0)
             usage["cache_write_tokens"] = getattr(agent, "session_cache_write_tokens", 0)
             usage["prompt_tokens"] = getattr(agent, "session_prompt_tokens", 0)
+            # LOCAL PATCH (PATCH-007): rolling per-call cache history for the card footer.
+            usage["cache_history"] = [
+                [int(p), int(c)] for p, c in (getattr(agent, "_api_cache_history", None) or ())
+            ]
         except Exception:
             pass
         # HERMES_FEISHU_CARD_PROVIDER_USAGE_END

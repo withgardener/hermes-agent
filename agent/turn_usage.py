@@ -179,6 +179,11 @@ def record_response_usage(
         ohist = getattr(agent, "_api_output_history", None)
         if ohist is not None:
             ohist.append(int(canonical_usage.output_tokens or 0))
+        # LOCAL PATCH (PATCH-007): per-call (prompt, cache_read) pairs for the HFC card footer's
+        # rolling cache-hit display; deque(maxlen=10) evicts oldest automatically.
+        chist = getattr(agent, "_api_cache_history", None)
+        if chist is not None:
+            chist.append((int(prompt_tokens or 0), int(canonical_usage.cache_read_tokens or 0)))
 
     _cache_pct = ""
     if canonical_usage.cache_read_tokens and prompt_tokens:
