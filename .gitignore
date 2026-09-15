@@ -1,2 +1,10 @@
 *.hermes_feishu_card.bak
 .hermes_feishu_card_recovery.lock
+
+# Runtime artifacts (accumulate from normal use; not source)
+__pycache__/
+*.pyc
+.pytest-cache/
+.bytecode-fingerprint
+*.egg-info/
+test_durations.json
