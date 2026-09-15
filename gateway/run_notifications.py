@@ -104,6 +104,18 @@ class GatewayNotificationsMixin:
 
     async def _deliver_platform_notice(self, source, content: str) -> None:
         """Deliver a setup/operational notice using platform-specific privacy rules."""
+        # HERMES_FEISHU_CARD_PLATFORM_NOTICE_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import handle_platform_notice_from_hermes as _hfc_handle_platform_notice
+            if _hfc_handle_platform_notice(self, source, content):
+                return None
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_PLATFORM_NOTICE_PATCH_END
         from gateway.run import _is_slack_ignored_channel
         adapter = self._adapter_for_source(source)
         if not adapter:

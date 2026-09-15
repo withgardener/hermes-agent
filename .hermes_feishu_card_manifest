@@ -1,0 +1,114 @@
+{
+  "manifest_version": 4,
+  "layout": "gateway-decomposed-v1",
+  "integration_mode": "legacy-patch",
+  "targets": {
+    "gateway/run.py": {
+      "path": "gateway/run.py",
+      "backup": "gateway/run.py.hermes_feishu_card.bak",
+      "original_sha256": "ab619aa0dc193c6d8741f3cabc9a028c2fb7459c22262c69597b0e872091bde5",
+      "patched_sha256": "ab619aa0dc193c6d8741f3cabc9a028c2fb7459c22262c69597b0e872091bde5"
+    },
+    "gateway/run_turn.py": {
+      "path": "gateway/run_turn.py",
+      "backup": "gateway/run_turn.py.hermes_feishu_card.bak",
+      "original_sha256": "56e6fb62b60e954ef0d258c7c44ed3fca99c4aa6d2c502d8f80a1c516569f537",
+      "patched_sha256": "173450ab2c526e90afaf8f833944e5649b380cde0fdeba26eef08d575ce0aced"
+    },
+    "gateway/run_turn_runner.py": {
+      "path": "gateway/run_turn_runner.py",
+      "backup": "gateway/run_turn_runner.py.hermes_feishu_card.bak",
+      "original_sha256": "b87d6072f2cc13634398d380eb0857d550f75502a8ace137138cf16e00d9a763",
+      "patched_sha256": "fe995b1f4a0af416def32741ca3695e897422796168a0ef6a0d7c19482e9502c"
+    },
+    "gateway/run_inbound.py": {
+      "path": "gateway/run_inbound.py",
+      "backup": "gateway/run_inbound.py.hermes_feishu_card.bak",
+      "original_sha256": "9f82c79b913e5dd14807b31f04b2a3449b82dc3cdbc7c7779c935bff02c2cc84",
+      "patched_sha256": "2debaf7f61f82233fa9c5ce66d0b873f08c704ae01868c4f911037a24ba3163a"
+    },
+    "gateway/run_busy.py": {
+      "path": "gateway/run_busy.py",
+      "backup": "gateway/run_busy.py.hermes_feishu_card.bak",
+      "original_sha256": "bfc6fb9e407a82c58eed1100b5bb772a72f877e98a281f5356d7e7436304b306",
+      "patched_sha256": "2efe14a4a0847a71a1b8ef1ce300b0d65d10fe85507b357fea704ff33e2aa571"
+    },
+    "gateway/run_startup.py": {
+      "path": "gateway/run_startup.py",
+      "backup": "gateway/run_startup.py.hermes_feishu_card.bak",
+      "original_sha256": "3a35f8937e97ba5926b12ee7156d6c02158d4e9a4ad129cbe56891eb41c2f6a7",
+      "patched_sha256": "bf7640444890934aa3ba0655f6b876eb49346efd70186a4f09338d2656005155"
+    },
+    "gateway/run_notifications.py": {
+      "path": "gateway/run_notifications.py",
+      "backup": "gateway/run_notifications.py.hermes_feishu_card.bak",
+      "original_sha256": "31a6d7841ad250c57aed661ce9f1a76ee9b35ab7d1e6cfd64015c16209d240c6",
+      "patched_sha256": "4b4efa83724f8683d27a0c94b2be61229e92d5721eeb70d268edb27e24407fea"
+    },
+    "cron/scheduler.py": {
+      "path": "cron/scheduler.py",
+      "backup": "cron/scheduler.py.hermes_feishu_card.bak",
+      "original_sha256": "df7b82c50485cece408264f3cd44dc910b6b2a7d319b6d138bd42e2cf7ba2e86",
+      "patched_sha256": "df7b82c50485cece408264f3cd44dc910b6b2a7d319b6d138bd42e2cf7ba2e86"
+    },
+    "cron/scheduler_delivery.py": {
+      "path": "cron/scheduler_delivery.py",
+      "backup": "cron/scheduler_delivery.py.hermes_feishu_card.bak",
+      "original_sha256": "43ea115bba07e6b789a1c8552dd606bd23e43ae6b80332844520e6510f44d96d",
+      "patched_sha256": "048a60b7fc4c82386b7a6c2f369ee6e0e96c73e407f4a09a136fa2bcd7ed54ea"
+    },
+    "gateway/platforms/base.py": {
+      "path": "gateway/platforms/base.py",
+      "backup": "gateway/platforms/base.py.hermes_feishu_card.bak",
+      "original_sha256": "54a6aaabac9d9800224b844b9ad12f8d3cf073a994e2b8e0d0a7f1ca80bc86ee",
+      "patched_sha256": "fbe543fa16c0de001b575b54010e30e13f77178951c7ffee27f311b046a8ddcf"
+    }
+  },
+  "integrity": {
+    "version": 3,
+    "kind": "verified_owned_snapshot",
+    "layout": "gateway-decomposed-v1",
+    "targets": {
+      "gateway/run.py": {
+        "original_sha256": "ab619aa0dc193c6d8741f3cabc9a028c2fb7459c22262c69597b0e872091bde5",
+        "patched_sha256": "ab619aa0dc193c6d8741f3cabc9a028c2fb7459c22262c69597b0e872091bde5"
+      },
+      "gateway/run_turn.py": {
+        "original_sha256": "56e6fb62b60e954ef0d258c7c44ed3fca99c4aa6d2c502d8f80a1c516569f537",
+        "patched_sha256": "173450ab2c526e90afaf8f833944e5649b380cde0fdeba26eef08d575ce0aced"
+      },
+      "gateway/run_turn_runner.py": {
+        "original_sha256": "b87d6072f2cc13634398d380eb0857d550f75502a8ace137138cf16e00d9a763",
+        "patched_sha256": "fe995b1f4a0af416def32741ca3695e897422796168a0ef6a0d7c19482e9502c"
+      },
+      "gateway/run_inbound.py": {
+        "original_sha256": "9f82c79b913e5dd14807b31f04b2a3449b82dc3cdbc7c7779c935bff02c2cc84",
+        "patched_sha256": "2debaf7f61f82233fa9c5ce66d0b873f08c704ae01868c4f911037a24ba3163a"
+      },
+      "gateway/run_busy.py": {
+        "original_sha256": "bfc6fb9e407a82c58eed1100b5bb772a72f877e98a281f5356d7e7436304b306",
+        "patched_sha256": "2efe14a4a0847a71a1b8ef1ce300b0d65d10fe85507b357fea704ff33e2aa571"
+      },
+      "gateway/run_startup.py": {
+        "original_sha256": "3a35f8937e97ba5926b12ee7156d6c02158d4e9a4ad129cbe56891eb41c2f6a7",
+        "patched_sha256": "bf7640444890934aa3ba0655f6b876eb49346efd70186a4f09338d2656005155"
+      },
+      "gateway/run_notifications.py": {
+        "original_sha256": "31a6d7841ad250c57aed661ce9f1a76ee9b35ab7d1e6cfd64015c16209d240c6",
+        "patched_sha256": "4b4efa83724f8683d27a0c94b2be61229e92d5721eeb70d268edb27e24407fea"
+      },
+      "cron/scheduler.py": {
+        "original_sha256": "df7b82c50485cece408264f3cd44dc910b6b2a7d319b6d138bd42e2cf7ba2e86",
+        "patched_sha256": "df7b82c50485cece408264f3cd44dc910b6b2a7d319b6d138bd42e2cf7ba2e86"
+      },
+      "cron/scheduler_delivery.py": {
+        "original_sha256": "43ea115bba07e6b789a1c8552dd606bd23e43ae6b80332844520e6510f44d96d",
+        "patched_sha256": "048a60b7fc4c82386b7a6c2f369ee6e0e96c73e407f4a09a136fa2bcd7ed54ea"
+      },
+      "gateway/platforms/base.py": {
+        "original_sha256": "54a6aaabac9d9800224b844b9ad12f8d3cf073a994e2b8e0d0a7f1ca80bc86ee",
+        "patched_sha256": "fbe543fa16c0de001b575b54010e30e13f77178951c7ffee27f311b046a8ddcf"
+      }
+    }
+  }
+}
