@@ -705,19 +705,51 @@ def _ambiguous_alias_message(err: "AmbiguousAliasError") -> str:
         f"Pick one with /model <exact-model-name>.")
 
 
+def _default_model_alias_route() -> Optional[tuple[str, str, str]]:
+    """Resolve the reserved ``main`` alias to the configured default model (HFC patch).
+
+    ``/model main`` means "go back to the configured default": read ``model.default`` (+
+    ``model.provider`` / ``model.base_url``) live from config.yaml instead of pointing at a
+    hardcoded model that goes stale when the default changes. A user-defined ``main`` entry in
+    ``model_aliases:`` / ``model.aliases`` always wins — only the bare alias is dynamic."""
+    try:
+        from hermes_cli.config import load_config
+        model_cfg = load_config().get("model") or {}
+        default = _clean(model_cfg.get("default") or model_cfg.get("model"))
+        if not default:
+            return None
+        provider = _clean(model_cfg.get("provider")) or "custom"
+        base_url = _clean(model_cfg.get("base_url"))
+        return (provider, default, "main")
+    except Exception:
+        return None
+
+
 def resolve_alias(raw_input: str, current_provider: str) -> Optional[tuple[str, str, str]]:
     """Resolve a short alias against the current provider's catalog.
 
     Direct aliases (and reverse lookup by exact model id) win; then :data:`MODEL_ALIASES` is
     matched against the provider's models.dev catalog by ``vendor/family`` prefix (``family``
     for non-aggregators). Returns ``(provider, resolved_model_id, alias_name)`` or None; raises
-    :class:`AmbiguousAliasError` when several catalog models match."""
+    :class:`AmbiguousAliasError` when several catalog models match.
+
+    The reserved ``main`` alias resolves to the configured default model (``model.default`` +
+    ``model.provider``/``model.base_url``) so ``/model main`` always returns to whatever the
+    global default currently is — unless the user defined their own ``main`` entry in
+    ``model_aliases:``, which takes precedence. (HFC patch)
+    """
     key = raw_input.strip().lower()
 
     _ensure_direct_aliases()
     direct = DIRECT_ALIASES.get(key)
     if direct is not None:
         return (direct.provider, direct.model, key)
+
+    # Reserved "main": dynamic resolution to the configured default model (HFC patch).
+    if key == "main":
+        main_route = _default_model_alias_route()
+        if main_route is not None:
+            return main_route
 
     # Reverse lookup so full names ("kimi-k2.5") route through direct aliases instead of
     # falling through to the catalog/OpenRouter.
