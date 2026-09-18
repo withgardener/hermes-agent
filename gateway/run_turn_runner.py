@@ -1282,6 +1282,8 @@ class TurnRunner:
         try:
             from hermes_feishu_card.hook_runtime import bind_agent_turn_identity as _hfc_bind_agent_turn
             _hfc_bind_agent_turn(agent, _hfc_turn_ctx.source)
+            from hermes_feishu_card.hook_runtime import bind_agent_reasoning as _hfc_bind_reasoning
+            _hfc_bind_reasoning(agent, _hfc_turn_ctx.source, _hfc_turn_ctx.event_message_id, _hfc_turn_ctx._loop_for_step, _hfc_turn_ctx._run_still_current)
             from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_threadsafe as _hfc_emit_stable_threadsafe
             _hfc_original_tool_progress_callback = getattr(agent, "tool_progress_callback", None)
             if getattr(_hfc_original_tool_progress_callback, "_hfc_stable_wrapper", False):

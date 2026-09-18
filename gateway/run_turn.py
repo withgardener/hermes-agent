@@ -2040,6 +2040,9 @@ class GatewayTurnMixin:
                 _hfc_started_message_id = getattr(event, "message_id", None) or self._reply_anchor_for_event(event)
             except Exception:
                 _hfc_started_message_id = getattr(event, "message_id", None)
+            _hfc_anchor_source = locals().get("source")
+            if _hfc_started_message_id and _hfc_anchor_source is not None:
+                _hfc_anchor_source.message_id = _hfc_started_message_id
             if _hfc_handle_command({**locals(), "message_id": _hfc_started_message_id}):
                 return None
             _hfc_emit({**locals(), "message_id": _hfc_started_message_id})
@@ -3585,11 +3588,15 @@ class GatewayTurnMixin:
                 _hfc_turn_ctx = locals().get("turn_ctx")
                 _hfc_source = locals().get("source") or getattr(_hfc_turn_ctx, "source", None)
                 _hfc_message_id = locals().get("event_message_id") or getattr(_hfc_turn_ctx, "event_message_id", None)
+                _hfc_delivery_result = locals().get("_delivery_result")
+                if not isinstance(_hfc_delivery_result, dict):
+                    _hfc_delivery_result = result if isinstance(result, dict) else {}
                 _hfc_completed_locals = {
                     **locals(),
                     "source": _hfc_source,
                     "message_id": _hfc_message_id,
                     "answer": first_response,
+                    "agent_result": _hfc_delivery_result,
                     "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
                     "model": result.get("model", "") if isinstance(result, dict) else "",
                     "tokens": {
@@ -3798,8 +3805,15 @@ class GatewayTurnMixin:
                 from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_async as _hfc_emit_async
                 if pending_event is not None and isinstance(followup_result, dict) and not followup_result.get("_hfc_queued_final_delivered") and not followup_result.get("_hfc_queued_final_attempted"):
                     followup_result = {**followup_result, "_hfc_queued_final_attempted": True}
-                    _hfc_final_locals = {"source": next_source, "message_id": getattr(pending_event, "message_id", None) or next_message_id, "answer": followup_result.get("final_response", ""), "error": followup_result.get("error") or "任务已中断", "agent_result": followup_result}
-                    _hfc_final_event_name = "message.failed" if followup_result.get("failed") or followup_result.get("interrupted") else "message.completed"
+                    _hfc_final_answer = followup_result.get("final_response") or followup_result.get("error") or ""
+                    _hfc_final_metrics = {"duration": followup_result.get("_hfc_turn_seconds"), "model": followup_result.get("model", ""), "tokens": {"input_tokens": followup_result.get("input_tokens", 0), "output_tokens": followup_result.get("output_tokens", 0)}, "context": {"used_tokens": followup_result.get("last_prompt_tokens", 0), "max_tokens": followup_result.get("context_length", 0)}}
+                    _hfc_final_locals = {"source": next_source, "message_id": getattr(pending_event, "message_id", None) or next_message_id, "answer": _hfc_final_answer, "error": followup_result.get("error") or "任务已中断", "agent_result": followup_result, **_hfc_final_metrics}
+                    # A queued follow-up ends with the completed envelope even when it failed. Only that
+                    # branch reads duration/model/tokens/context, and the failure still reaches the card
+                    # because the turn result travels as agent_result (the sidecar derives turn_outcome
+                    # from it). Emitting message.failed here produced a context-free card - no tool count,
+                    # no duration, no model - so it said nothing about where the run stopped.
+                    _hfc_final_event_name = "message.completed"
                     if await _hfc_emit_async(_hfc_final_locals, event_name=_hfc_final_event_name):
                         followup_result = {**followup_result, "_hfc_queued_final_delivered": True}
             except Exception as _hfc_exc:
@@ -4109,6 +4123,17 @@ class GatewayTurnMixin:
                         _heartbeat_msg_id = str(_notify_res.message_id)
                         if turn_ctx._cleanup_progress:
                             turn_ctx._cleanup_msg_ids.append(_heartbeat_msg_id)
+                    # HERMES_FEISHU_CARD_LONG_RUNNING_RECALL_PATCH_BEGIN
+                    try:
+                        from hermes_feishu_card.hook_runtime import recall_transient_thread_notice_async as _hfc_recall_notice
+                        await _hfc_recall_notice(source, _heartbeat_text, _notify_res)
+                    except Exception as _hfc_exc:
+                        try:
+                            import sys as _hfc_sys
+                            print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+                        except Exception:
+                            pass
+                    # HERMES_FEISHU_CARD_LONG_RUNNING_RECALL_PATCH_END
             except Exception as _ne:
                 logger.debug("Long-running notification error: %s", _ne)
 
