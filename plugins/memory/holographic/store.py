@@ -1,5 +1,6 @@
 """SQLite-backed fact store with entity resolution and trust scoring (single-user Hermes memory plugin)."""
 
+import logging
 import os
 import re
 import sqlite3
@@ -7,6 +8,8 @@ import threading
 from pathlib import Path
 
 from . import holographic as hrr
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS facts (
@@ -41,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
 CREATE INDEX IF NOT EXISTS idx_entities_name  ON entities(name);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts
-    USING fts5(content, tags, content=facts, content_rowid=fact_id);
+    USING fts5(content, tags, content=facts, content_rowid=fact_id, tokenize='trigram');
 
 CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
     INSERT INTO facts_fts(rowid, content, tags)
@@ -131,7 +134,36 @@ class MemoryStore:
         if "hrr_vector" not in {row[1] for row in self._conn.execute("PRAGMA table_info(facts)").fetchall()}:
             from hermes_cli.sqlite_util import add_column_if_missing
             add_column_if_missing(self._conn, "facts", "hrr_vector", "hrr_vector BLOB")
+        self._migrate_fts_tokenizer_if_needed()
         self._conn.commit()
+
+    def _migrate_fts_tokenizer_if_needed(self) -> None:
+        """LOCAL PATCH (holographic CJK support, 2026-09-18): facts_fts is a 'CREATE VIRTUAL TABLE
+        IF NOT EXISTS', so a pre-existing DB (created before this patch, with the old unaccented
+        'unicode61' tokenizer) keeps its old index shape forever — IF NOT EXISTS never re-runs the
+        table definition. unicode61 collapses an entire CJK sentence into ONE token (no whitespace
+        to split on), so every narrower Chinese query against an old-tokenizer index silently
+        returns zero results even after this patch ships, unless the index itself is rebuilt.
+
+        Detect the mismatch via the table's own reconstructed CREATE statement (sqlite_master.sql
+        always reflects the tokenizer actually in use, regardless of source-code changes) and, if
+        it is missing 'trigram', drop + recreate facts_fts against the SAME external content table
+        (content=facts) — this is documented as the supported way to change an existing FTS5
+        table's tokenizer without touching the underlying facts rows. A rebuild reads all rows back
+        from the content table, so no fact data is lost; it only rewrites the search index.
+        """
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='facts_fts'"
+        ).fetchone()
+        if row is None or "trigram" in (row[0] or "").lower():
+            return  # brand-new table (already trigram via _SCHEMA) or already migrated
+        logger.info("Migrating facts_fts to trigram tokenizer for CJK search support")
+        self._conn.executescript(
+            "DROP TABLE facts_fts;\n"
+            "CREATE VIRTUAL TABLE facts_fts USING fts5(content, tags, content=facts, "
+            "content_rowid=fact_id, tokenize='trigram');\n"
+            "INSERT INTO facts_fts(facts_fts) VALUES('rebuild');"
+        )
 
     def _one(self, sql: str, params=()):
         return self._conn.execute(sql, params).fetchone()

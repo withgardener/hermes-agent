@@ -4,6 +4,7 @@ Jaccard similarity and HRR vector similarity, trust-weighted (ported from KIK me
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -17,6 +18,10 @@ _FACT_COLUMNS = "fact_id, content, category, tags, trust_score, retrieval_count,
 _ROLE_ENTITY, _ROLE_CONTENT = hrr.ROLE_ENTITY, hrr.ROLE_CONTENT
 _PUNCT = ".,;:!?\"'()[]{}#@<>"
 _FTS_OPERATORS = str.maketrans("", "", '"()*^:-+')
+# LOCAL PATCH (holographic CJK support, 2026-09-18): matches a full CJK (Chinese/Japanese/Korean
+# Unified Ideographs) run so _sanitize_fts_query can route it through 3-gram tokenization instead
+# of whitespace splitting (CJK text carries no whitespace between words).
+_CJK_SEGMENT_RE = re.compile(r"^[\u4e00-\u9fff]+$")
 # Stopwords dropped before FTS5 OR-expansion: short English function words that
 # carry no retrieval signal and force false-negative AND matches.
 _FTS_STOPWORDS = frozenset("""
@@ -175,11 +180,35 @@ class FactRetriever:
         try:
             results = [dict(row) for row in self.store._conn.execute(sql, params).fetchall()]
         except Exception:
-            return []  # FTS5 MATCH can fail on malformed queries
+            results = []  # FTS5 MATCH can fail on malformed queries
+        # LOCAL PATCH (holographic CJK support, 2026-09-18): a 1-2 character CJK query segment
+        # ("灾备", "东京") can never form a complete trigram token, so _sanitize_fts_query silently
+        # drops it and the MATCH above returns nothing for it. Fall back to a LIKE substring scan
+        # for those short segments — the facts table is small (single-user local memory store, not
+        # a search-engine-scale corpus) so an unindexed scan here is cheap and only runs when the
+        # trigram path could not have found the row itself.
+        short_segments = self._cjk_substring_candidates(query)
+        if short_segments:
+            seen_ids = {f["fact_id"] for f in results}
+            like_clause = " OR ".join(["f.content LIKE ?"] * len(short_segments))
+            like_sql = (f"SELECT f.* FROM facts f WHERE ({like_clause}) {('AND f.category = ? ' if category else '')}"
+                       "AND f.trust_score >= ?")
+            like_params = [f"%{seg}%" for seg in short_segments] + ([category] if category else []) + [min_trust]
+            try:
+                for row in self.store._conn.execute(like_sql, like_params).fetchall():
+                    fact = dict(row)
+                    if fact["fact_id"] not in seen_ids:
+                        fact["fts_rank"] = 0.5  # neutral: LIKE has no relevance ranking to normalize
+                        results.append(fact)
+                        seen_ids.add(fact["fact_id"])
+            except Exception:
+                pass  # LIKE fallback is best-effort; never let it break the primary FTS5 path
+            results = results[:limit]
         # FTS5 rank is negative (lower = better); normalize |rank| / max to [0, 1] (1e-6 floor avoids div by zero)
-        max_rank = max([abs(f["fts_rank_raw"]) for f in results] + [1e-6])
+        max_rank = max([abs(f.get("fts_rank_raw", 0.0)) for f in results if "fts_rank_raw" in f] + [1e-6])
         for fact in results:
-            fact["fts_rank"] = abs(fact.pop("fts_rank_raw")) / max_rank
+            if "fts_rank_raw" in fact:
+                fact["fts_rank"] = abs(fact.pop("fts_rank_raw")) / max_rank
         return results
 
     @staticmethod
@@ -189,14 +218,40 @@ class FactRetriever:
 
     @staticmethod
     def _sanitize_fts_query(query: str) -> str:
-        """Natural-language query -> FTS5-safe OR expression of quoted tokens. FTS5 AND-joins a multi-word
-        MATCH by default, which tanks recall on prose: drop stopwords and <2-char tokens, strip FTS5 operator
-        chars, phrase-quote each survivor. If nothing survives, return the raw query (zero results, not a SQL error)."""
+        """Natural-language query -> FTS5-safe OR expression against the trigram-tokenized index.
+
+        LOCAL PATCH (holographic CJK support, 2026-09-18): the facts_fts table's tokenizer is
+        'trigram' (see store.py _SCHEMA), which indexes every literal 3-character substring —
+        required because CJK text has no whitespace for unicode61 to split on (an entire Chinese
+        sentence collapsed into ONE token under unicode61, so any query narrower than the full
+        original sentence scored zero). trigram needs each MATCH term to be exactly 3 characters;
+        this sanitizer therefore treats a run of CJK characters as a sliding 3-gram window (not a
+        single whitespace-split token) alongside the existing whitespace/stopword handling for
+        Latin-script words, and OR-joins every survivor as a quoted phrase.
+        """
         if not query:
             return ""
-        tokens = [f'"{c}"' for c in (raw.strip(_PUNCT).translate(_FTS_OPERATORS) for raw in query.lower().split())
-                  if len(c) >= 2 and c not in _FTS_STOPWORDS]
-        return " OR ".join(tokens) if tokens else query
+        tokens: list[str] = []
+        for segment in re.findall(r"[\u4e00-\u9fff]+|[^\u4e00-\u9fff\s]+", query.lower()):
+            if _CJK_SEGMENT_RE.match(segment):
+                # CJK run: sliding 3-gram (trigram tokenizer's exact match granularity). Segments
+                # shorter than 3 characters yield no gram here — see _cjk_substring_candidates(),
+                # which the caller uses as a LIKE fallback for those over-short queries.
+                tokens.extend(segment[i:i + 3] for i in range(len(segment) - 2))
+            else:
+                cleaned = segment.strip(_PUNCT).translate(_FTS_OPERATORS)
+                if len(cleaned) >= 2 and cleaned not in _FTS_STOPWORDS:
+                    tokens.append(cleaned)
+        if not tokens:
+            return query
+        return " OR ".join(f'"{token}"' for token in tokens)
+
+    @staticmethod
+    def _cjk_substring_candidates(query: str) -> list[str]:
+        """CJK runs shorter than 3 characters (2-character words like '灾备', '东京') can never form
+        a trigram token, so _sanitize_fts_query's MATCH expression silently excludes them. Returns
+        each such short run for a LIKE '%run%' fallback scan — see _fts_candidates()."""
+        return [seg for seg in re.findall(r"[\u4e00-\u9fff]+", query.lower()) if 0 < len(seg) < 3]
 
     @staticmethod
     def _jaccard_similarity(set_a: set, set_b: set) -> float:
