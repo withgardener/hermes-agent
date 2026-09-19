@@ -2026,17 +2026,17 @@ class TurnRunner:
         try:
             from hermes_feishu_card.hook_runtime import effective_response_model as _hfc_effective_model
             usage["model"] = _hfc_effective_model(agent) or usage["model"]
-            usage["input_tokens"] = getattr(agent, "session_input_tokens", 0)
-            usage["output_tokens"] = getattr(agent, "session_output_tokens", 0)
-            usage["cache_read_tokens"] = getattr(agent, "session_cache_read_tokens", 0)
-            usage["cache_write_tokens"] = getattr(agent, "session_cache_write_tokens", 0)
-            usage["prompt_tokens"] = getattr(agent, "session_prompt_tokens", 0)
-            # LOCAL PATCH (PATCH-007): rolling per-call cache history for the card footer.
-            usage["cache_history"] = [
-                [int(p), int(c)] for p, c in (getattr(agent, "_api_cache_history", None) or ())
-            ]
         except Exception:
             pass
+        usage["input_tokens"] = getattr(agent, "session_input_tokens", 0)
+        usage["output_tokens"] = getattr(agent, "session_output_tokens", 0)
+        usage["cache_read_tokens"] = getattr(agent, "session_cache_read_tokens", 0)
+        usage["cache_write_tokens"] = getattr(agent, "session_cache_write_tokens", 0)
+        usage["prompt_tokens"] = getattr(agent, "session_prompt_tokens", 0)
+        # LOCAL PATCH (PATCH-007): rolling per-call cache history for the card footer.
+        usage["cache_history"] = [
+            [int(p), int(c)] for p, c in (getattr(agent, "_api_cache_history", None) or ())
+        ]
         # HERMES_FEISHU_CARD_PROVIDER_USAGE_END
         compacted_in_place, effective_session_id, history_offset = self._sync_session_after_run(agent_history)
         # failure_reason must survive the empty-response path too (TUI billing, transient-failure
