@@ -3774,6 +3774,7 @@ class GatewayTurnMixin:
 
             # HERMES_FEISHU_CARD_QUEUED_FOLLOWUP_PATCH_BEGIN
             try:
+                from hermes_feishu_card.hook_runtime import interrupted_turn_locals as _hfc_interrupted_locals
                 from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_async as _hfc_emit_async
                 if pending_event is not None:
                     _hfc_turn_ctx = locals().get("turn_ctx")
@@ -3781,7 +3782,7 @@ class GatewayTurnMixin:
                     _hfc_original_message_id = str(locals().get("event_message_id") or getattr(_hfc_turn_ctx, "event_message_id", None) or "")
                     _hfc_was_interrupted = bool(locals().get("was_interrupted") or (result.get("interrupted") if isinstance(result, dict) else False))
                     if _hfc_was_interrupted and _hfc_original_message_id:
-                        await _hfc_emit_async({"source": source, "chat_id": getattr(source, "chat_id", None), "message_id": _hfc_original_message_id, "error": "用户已打断当前任务"}, event_name="message.failed")
+                        await _hfc_emit_async(_hfc_interrupted_locals(source, _hfc_original_message_id, result), event_name="message.failed")
                     if _hfc_followup_message_id:
                         from copy import copy as _hfc_copy
                         next_source = _hfc_copy(next_source)

@@ -13,7 +13,7 @@
       "path": "gateway/run_turn.py",
       "backup": "gateway/run_turn.py.hermes_feishu_card.bak",
       "original_sha256": "56e6fb62b60e954ef0d258c7c44ed3fca99c4aa6d2c502d8f80a1c516569f537",
-      "patched_sha256": "f891d813b0d48a1fd036b0ec2b84bdcbb94e383367f08f109038a5f475f5f661"
+      "patched_sha256": "5e84258019b655c6d7ab813ce5e248e3875931ca844f03609cef4aee677f3af5"
     },
     "gateway/run_turn_runner.py": {
       "path": "gateway/run_turn_runner.py",
@@ -75,11 +75,11 @@
       },
       "gateway/run_turn.py": {
         "original_sha256": "56e6fb62b60e954ef0d258c7c44ed3fca99c4aa6d2c502d8f80a1c516569f537",
-        "patched_sha256": "f891d813b0d48a1fd036b0ec2b84bdcbb94e383367f08f109038a5f475f5f661"
+        "patched_sha256": "5e84258019b655c6d7ab813ce5e248e3875931ca844f03609cef4aee677f3af5"
       },
       "gateway/run_turn_runner.py": {
         "original_sha256": "b87d6072f2cc13634398d380eb0857d550f75502a8ace137138cf16e00d9a763",
-        "patched_sha256": "f757ba422beeecb1a64240c5ce55d51a47b9246bfc240fc4789957152b5e1f6f"
+        "patched_sha256": "2be8c86535aa9cdcd78481cc21e64347bf74954d5c4ef5f7197888f71359e5d5"
       },
       "gateway/run_inbound.py": {
         "original_sha256": "9f82c79b913e5dd14807b31f04b2a3449b82dc3cdbc7c7779c935bff02c2cc84",
