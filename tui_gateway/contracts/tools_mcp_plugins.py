@@ -204,7 +204,9 @@ method("skills.manage", params=SkillsManageParams, result=SkillsManageResult,
 
 
 class SkillsReloadParams(Params):
-    pass
+    """``session_id`` binds the rescan to that session's profile and workspace (project skills)."""
+
+    session_id: str | None = None
 
 
 class SkillCommandRef(Result):
@@ -381,6 +383,7 @@ class McpRuntimeStatus(WireEnum):
     disabled = "disabled"
     connecting = "connecting"
     failed = "failed"
+    lazy = "lazy"
     configured = "configured"
 
 
@@ -530,6 +533,8 @@ class McpOauthCallbackParams(McpOauthFlowParams):
     code: str | None = None
     state: str | None = None
     error: str | None = None
+    # RFC 9207 issuer; extra="forbid" would otherwise 4000 the desktop relay that always sends it.
+    iss: str | None = None
 
 
 class McpOauthCallbackResult(Result):
@@ -568,11 +573,12 @@ class PluginsAction(WireEnum):
     toggle = "toggle"
     install = "install"
     update = "update"
+    remove = "remove"
 
 
 class PluginsManageParams(ProfileParams):
     """``toggle``: ``key``/``name`` + ``enable``; ``install``: ``identifier``/``repo`` or ``catalog_name``
-    (+ ``force``, ``enable``, ``ref``); ``update``: ``name``."""
+    (+ ``force``, ``enable``, ``ref``); ``update``: ``name``; ``remove``: ``name`` (user installs only)."""
 
     action: PluginsAction = PluginsAction.list
     key: str | None = None
@@ -601,6 +607,7 @@ class AgentPluginRow(Result):
     catalog_tier: str | None = None
     installed_sha: str | None = None
     catalog_sha: str | None = None
+    catalog_version: str | None = None
     update_available: bool | None = None
     pinned_sha: str | None = None
 
@@ -608,7 +615,7 @@ class AgentPluginRow(Result):
 class PluginsManageResult(Result):
     """``list`` → ``plugins`` + counts; ``toggle`` → ``ok``/``unchanged``/``name``/``plugin``;
     ``install`` → ``hermes_cli.plugins_cmd.dashboard_install_plugin``'s ok payload; ``update`` →
-    ``ok``/``unchanged``/``sha``."""
+    ``ok``/``unchanged``/``sha``; ``remove`` → ``ok``/``name``."""
 
     plugins: list[AgentPluginRow] | None = None
     user_count: int | None = None
@@ -626,4 +633,5 @@ class PluginsManageResult(Result):
 
 
 method("plugins.manage", params=PluginsManageParams, result=PluginsManageResult,
-       doc="Plugins Hub backend: list installed plugins, toggle, git-install or re-pin a catalog install.")
+       doc="Plugins Hub backend: list installed plugins, toggle, git-install, re-pin a catalog install, "
+           "or remove a user install.")
