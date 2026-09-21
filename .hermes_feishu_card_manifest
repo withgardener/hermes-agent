@@ -7,61 +7,61 @@
       "path": "gateway/run.py",
       "backup": "gateway/run.py.hermes_feishu_card.bak",
       "original_sha256": "ab619aa0dc193c6d8741f3cabc9a028c2fb7459c22262c69597b0e872091bde5",
-      "patched_sha256": "ab619aa0dc193c6d8741f3cabc9a028c2fb7459c22262c69597b0e872091bde5"
+      "patched_sha256": "8ba267054af6bb4787e7867d9c968c3ab6b34f946e3e2ab147746cc9efefecbc"
     },
     "gateway/run_turn.py": {
       "path": "gateway/run_turn.py",
       "backup": "gateway/run_turn.py.hermes_feishu_card.bak",
       "original_sha256": "56e6fb62b60e954ef0d258c7c44ed3fca99c4aa6d2c502d8f80a1c516569f537",
-      "patched_sha256": "5e84258019b655c6d7ab813ce5e248e3875931ca844f03609cef4aee677f3af5"
+      "patched_sha256": "8852d57cb6e9906e796966b37e0dee8afd70b4ae3c077fc7da8b2d09ba214afc"
     },
     "gateway/run_turn_runner.py": {
       "path": "gateway/run_turn_runner.py",
       "backup": "gateway/run_turn_runner.py.hermes_feishu_card.bak",
       "original_sha256": "b87d6072f2cc13634398d380eb0857d550f75502a8ace137138cf16e00d9a763",
-      "patched_sha256": "1ca5e6ccd2a241fcf373b833cd779b4c3275c019cdce063ddd4d77d24183d5c5"
+      "patched_sha256": "d004e01e9e2c59780642e3cde34efc14f24019178cf9acfb2f8b0d736f240c84"
     },
     "gateway/run_inbound.py": {
       "path": "gateway/run_inbound.py",
       "backup": "gateway/run_inbound.py.hermes_feishu_card.bak",
       "original_sha256": "9f82c79b913e5dd14807b31f04b2a3449b82dc3cdbc7c7779c935bff02c2cc84",
-      "patched_sha256": "2debaf7f61f82233fa9c5ce66d0b873f08c704ae01868c4f911037a24ba3163a"
+      "patched_sha256": "b438562d97fd0e99d10082b255d37513e7a8b903b4dfc5f905bf150a7c93e42a"
     },
     "gateway/run_busy.py": {
       "path": "gateway/run_busy.py",
       "backup": "gateway/run_busy.py.hermes_feishu_card.bak",
       "original_sha256": "bfc6fb9e407a82c58eed1100b5bb772a72f877e98a281f5356d7e7436304b306",
-      "patched_sha256": "67263b72f2f0cb17406adc055f486befc63179bd03c4c43e6bcc727d371e5d5e"
+      "patched_sha256": "b8bfaebc8a301d9045688e5d986e35c61f2380c3ff430b7936aa6a40e8093bab"
     },
     "gateway/run_startup.py": {
       "path": "gateway/run_startup.py",
       "backup": "gateway/run_startup.py.hermes_feishu_card.bak",
       "original_sha256": "3a35f8937e97ba5926b12ee7156d6c02158d4e9a4ad129cbe56891eb41c2f6a7",
-      "patched_sha256": "bf7640444890934aa3ba0655f6b876eb49346efd70186a4f09338d2656005155"
+      "patched_sha256": "c582ddd36867b0b007869c34e992b21d3cf5ac3e4c1ca03929006712fdd877cd"
     },
     "gateway/run_notifications.py": {
       "path": "gateway/run_notifications.py",
       "backup": "gateway/run_notifications.py.hermes_feishu_card.bak",
       "original_sha256": "31a6d7841ad250c57aed661ce9f1a76ee9b35ab7d1e6cfd64015c16209d240c6",
-      "patched_sha256": "4b4efa83724f8683d27a0c94b2be61229e92d5721eeb70d268edb27e24407fea"
+      "patched_sha256": "2627d926b7993400f426721708d47d1bfafa5e93cc8fe9496428c17e020e8ed6"
     },
     "cron/scheduler.py": {
       "path": "cron/scheduler.py",
       "backup": "cron/scheduler.py.hermes_feishu_card.bak",
       "original_sha256": "df7b82c50485cece408264f3cd44dc910b6b2a7d319b6d138bd42e2cf7ba2e86",
-      "patched_sha256": "df7b82c50485cece408264f3cd44dc910b6b2a7d319b6d138bd42e2cf7ba2e86"
+      "patched_sha256": "faecc16fcf7f227c6d1efd17452205e82d0c4da9284e2593cfdf577f04e06d62"
     },
     "cron/scheduler_delivery.py": {
       "path": "cron/scheduler_delivery.py",
       "backup": "cron/scheduler_delivery.py.hermes_feishu_card.bak",
       "original_sha256": "43ea115bba07e6b789a1c8552dd606bd23e43ae6b80332844520e6510f44d96d",
-      "patched_sha256": "048a60b7fc4c82386b7a6c2f369ee6e0e96c73e407f4a09a136fa2bcd7ed54ea"
+      "patched_sha256": "f178c01757e104a9846573c96c03308c36d0304d64de99c7358bf9eb5eb008cc"
     },
     "gateway/platforms/base.py": {
       "path": "gateway/platforms/base.py",
       "backup": "gateway/platforms/base.py.hermes_feishu_card.bak",
       "original_sha256": "54a6aaabac9d9800224b844b9ad12f8d3cf073a994e2b8e0d0a7f1ca80bc86ee",
-      "patched_sha256": "fbe543fa16c0de001b575b54010e30e13f77178951c7ffee27f311b046a8ddcf"
+      "patched_sha256": "0036144be6fb126cfdaa9c9421f1261510236d4bb759f56ad26bbf4b5c380107"
     }
   },
   "integrity": {
