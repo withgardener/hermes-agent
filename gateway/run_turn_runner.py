@@ -877,13 +877,14 @@ class TurnRunner:
         try:
             from hermes_feishu_card.hook_runtime import handle_status_from_hermes_locals as _hfc_handle_status
             if _hfc_turn_ctx._run_still_current():
-                _hfc_handle_status({
+                if _hfc_handle_status({
                     **locals(),
                     "source": _hfc_turn_ctx.source,
                     "chat_id": _hfc_turn_ctx._status_chat_id,
                     "message_id": _hfc_turn_ctx.event_message_id,
                     "_hfc_loop": _hfc_turn_ctx._loop_for_step,
-                }, event_type=event_type, message=message)
+                }, event_type=event_type, message=message):
+                    return
         except Exception as _hfc_exc:
             try:
                 import sys as _hfc_sys
