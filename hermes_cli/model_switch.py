@@ -764,7 +764,7 @@ def resolve_alias(raw_input: str, current_provider: str) -> Optional[tuple[str, 
     for non-aggregators). Returns ``(provider, resolved_model_id, alias_name)`` or None; raises
     :class:`AmbiguousAliasError` when several catalog models match.
 
-    The reserved ``main`` alias resolves to the configured default model (``model.default`` +
+    The reserved ``main`` alias (synonym ``default``) resolves to the configured default model (``model.default`` +
     ``model.provider``/``model.base_url``) so ``/model main`` always returns to whatever the
     global default currently is — unless the user defined their own ``main`` entry in
     ``model_aliases:``, which takes precedence. (HFC patch)
@@ -776,11 +776,11 @@ def resolve_alias(raw_input: str, current_provider: str) -> Optional[tuple[str, 
     if direct is not None:
         return (direct.provider, direct.model, key)
 
-    # Reserved "main": dynamic resolution to the configured default model (HFC patch).
-    if key == "main":
+    # Reserved "main"/"default": dynamic resolution to the configured default model (HFC patch).
+    if key in ("main", "default"):
         main_route = _default_model_alias_route()
         if main_route is not None:
-            return main_route
+            return (main_route[0], main_route[1], key)
 
     # Reverse lookup so full names ("kimi-k2.5") route through direct aliases instead of
     # falling through to the catalog/OpenRouter.
@@ -1258,6 +1258,10 @@ def _route_explicit_provider(st: _Switch) -> Optional[ModelSwitchResult]:
                 f"No model detected on {pdef.name} ({pdef.base_url}). "
                 f"Specify the model explicitly: /model <model-name> --provider {st.explicit_provider}")
 
+    # MoA preset names (e.g. "default") are not model aliases — don't let the reserved
+    # "main"/"default" alias (HFC patch) rewrite an explicit --provider moa pick.
+    if st.target_provider == "moa":
+        return None
     try:
         alias_result = resolve_alias(st.new_model, st.target_provider)
     except AmbiguousAliasError as err:
@@ -1358,7 +1362,10 @@ def _route_from_model_input(st: _Switch) -> Optional[ModelSwitchResult]:
     try:
         from hermes_cli.config import load_config
         from hermes_cli.moa_config import exact_moa_preset_name, normalize_moa_config
-        moa_match = exact_moa_preset_name(normalize_moa_config(load_config().get("moa") or {}), raw_input)
+        # Reserved "main"/"default" always mean "back to the configured default model" (HFC patch);
+        # the MoA preset named "default" stays reachable via /moa and --provider moa.
+        moa_match = None if raw_input.strip().lower() in ("main", "default") else exact_moa_preset_name(
+            normalize_moa_config(load_config().get("moa") or {}), raw_input)
     except Exception:
         moa_match = None  # MoA config unreadable: fall through to plain alias resolution
     if moa_match:
