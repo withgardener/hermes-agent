@@ -614,25 +614,6 @@ class GatewayBusySessionMixin:
             redirected = self._redirect_active_turn(
                 running_agent, (event.text or "").strip(), session_key, event
             )
-        # HERMES_FEISHU_CARD_REDIRECT_PATCH_BEGIN
-        try:
-            from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_async as _hfc_emit_async
-            if bool(locals().get("redirected")):
-                _hfc_redirect_message_id = str(getattr(event, "message_id", "") or "")
-                from hermes_feishu_card.hook_runtime import redirect_turn_id_for_agent as _hfc_redirect_turn
-                from hermes_feishu_card.hook_runtime import redirect_conversation_id_for_agent as _hfc_redirect_conversation
-                _hfc_redirect_from_turn_id = _hfc_redirect_turn(locals().get("running_agent"), event.source)
-                if _hfc_redirect_message_id and _hfc_redirect_from_turn_id:
-                    from copy import copy as _hfc_copy
-                    _hfc_redirect_source = _hfc_copy(event.source)
-                    await _hfc_emit_async({"source": _hfc_redirect_source, "event": event, "message": event, "chat_id": getattr(event.source, "chat_id", None), "message_id": _hfc_redirect_message_id, "reply_to_message_id": getattr(event, "reply_to_message_id", "") or _hfc_redirect_message_id, "conversation_id": _hfc_redirect_conversation(locals().get("running_agent"), event.source), "redirect_from_turn_id": _hfc_redirect_from_turn_id, "redirect_followup": True}, event_name="message.started")
-        except Exception as _hfc_exc:
-            try:
-                import sys as _hfc_sys
-                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-            except Exception:
-                pass
-        # HERMES_FEISHU_CARD_REDIRECT_PATCH_END
         return self._BusySteerOutcome(
             effective_mode=effective_mode, demoted_for_subagents=demoted_for_subagents,
             demoted_for_compression=demoted_for_compression, steered=steered, redirected=redirected,

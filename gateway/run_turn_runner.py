@@ -1557,7 +1557,7 @@ class TurnRunner:
                     "kind": "clarify",
                 }, interaction_id="clarify_" + _hfc_uuid4().hex[:10], question=question, choices=choices, multi_select=locals().get("multi_select", False))
                 if _hfc_clarify_response is not None:
-                    return _hfc_clarify_response
+                    return _hfc_clarify_response, True
         except Exception as _hfc_exc:
             try:
                 import sys as _hfc_sys
