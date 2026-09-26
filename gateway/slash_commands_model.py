@@ -552,6 +552,11 @@ class GatewayModelCommandsMixin:
         result, error = await self._perform_model_switch(ctx, request.target, request.explicit_provider, source)
         if error is not None:
             return error
+        # LOCAL PATCH-022: model.switch_context_auto_compress — compress first instead of asking.
+        from gateway.slash_commands_model_autocompress import maybe_auto_compress
+        auto_handled, auto_reply = await maybe_auto_compress(self, event, ctx, result)
+        if auto_handled:
+            return auto_reply
         guard_fired, guard_reply = await self._model_selection_guard_reply(event, ctx, result)
         if guard_fired:
             return guard_reply
