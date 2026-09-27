@@ -2208,6 +2208,9 @@ class GatewayTurnMixin:
         # HERMES_FEISHU_CARD_STRATEGY gateway_run_013_plus
         try:
             from hermes_feishu_card.hook_runtime import emit_from_hermes_locals as _hfc_emit
+            if str(getattr(getattr(source, "platform", None), "value", getattr(source, "platform", None))).lower() == "feishu":
+                from hermes_feishu_card.hook_runtime import queued_followup_source as _hfc_turn_source
+                source = _hfc_turn_source(source, event)
             from hermes_feishu_card.hook_runtime import handle_hfc_command_from_hermes_locals as _hfc_handle_command
             _hfc_started_message_id = None
             try:
@@ -4043,11 +4046,11 @@ class GatewayTurnMixin:
                     _hfc_followup_message_id = str(getattr(pending_event, "message_id", "") or "")
                     _hfc_original_message_id = str(locals().get("event_message_id") or getattr(_hfc_turn_ctx, "event_message_id", None) or "")
                     _hfc_was_interrupted = bool(locals().get("was_interrupted") or (result.get("interrupted") if isinstance(result, dict) else False))
-                    if _hfc_was_interrupted and _hfc_original_message_id:
+                    if _hfc_was_interrupted and (_hfc_original_message_id or getattr(source, "_hfc_internal_turn_id", None)):
                         await _hfc_emit_async(_hfc_interrupted_locals(source, _hfc_original_message_id, result), event_name="message.failed")
-                    if _hfc_followup_message_id:
-                        from copy import copy as _hfc_copy
-                        next_source = _hfc_copy(next_source)
+                    if _hfc_followup_message_id or getattr(pending_event, "internal", False) is True:
+                        from hermes_feishu_card.hook_runtime import queued_followup_source as _hfc_queued_source
+                        next_source = _hfc_queued_source(next_source, pending_event)
                         await _hfc_emit_async({"source": next_source, "event": pending_event, "message": pending_event, "chat_id": getattr(next_source, "chat_id", None), "message_id": _hfc_followup_message_id, "reply_to_message_id": getattr(pending_event, "reply_to_message_id", "") or _hfc_followup_message_id}, event_name="message.started")
             except Exception as _hfc_exc:
                 try:
