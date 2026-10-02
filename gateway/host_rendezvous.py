@@ -145,6 +145,14 @@ def host_state_dir() -> Path:
     return _get_lock_dir()
 
 
+def _guard_live_lock_dir(path: Path) -> None:
+    """LOCAL PATCH (PATCH-023): a test process must never claim, publish or retract the
+    operator's live host record/lock/token (no-op outside a test context)."""
+    from hermes_state_guard import ensure_host_lock_file_test_isolation
+
+    ensure_host_lock_file_test_isolation(path)
+
+
 def ensure_host_state_dir() -> Path:
     """The rendezvous dir, created owner-only (``0o700``) and tightened if it is not.
 
@@ -400,6 +408,7 @@ def claim_host_lock(role: str) -> tuple[HostLockOutcome, Optional[OSError]]:
     from gateway.status import _try_acquire_file_lock
 
     path = Path(key[1])
+    _guard_live_lock_dir(path)
     try:
         ensure_host_state_dir()
         handle = open(path, "a+", encoding="utf-8")
@@ -447,6 +456,7 @@ def publish_record(
     control socket.
     """
     role = _validated_role(role)
+    _guard_live_lock_dir(record_path(role))
     record = HostRecord(
         role=role,
         pid=os.getpid(),
@@ -494,6 +504,7 @@ def discard_dead_record(role: str) -> bool:
         return False
     if record.pid != os.getpid() and _pid_incarnation_matches(record.pid, record.create_time) is not False:
         return False
+    _guard_live_lock_dir(record_path(role))
     for path in (record_path(role), token_path(role)):
         with contextlib.suppress(OSError):
             path.unlink(missing_ok=True)
@@ -507,6 +518,7 @@ def clear_record(role: str) -> None:
     existing = read_record(role, include_stale=True)
     if existing is not None and existing.pid != os.getpid():
         return
+    _guard_live_lock_dir(record_path(role))
     for path in (record_path(role), token_path(role)):
         with contextlib.suppress(OSError):
             path.unlink(missing_ok=True)

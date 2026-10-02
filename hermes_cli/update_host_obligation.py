@@ -46,6 +46,22 @@ def host_obligation_path() -> Optional[Path]:
         return None
 
 
+def _guard_host_lock_dir_write(path: Path) -> bool:
+    """LOCAL PATCH (PATCH-023): False when a test-context process would create, rewrite or delete
+    this record in the operator's live lock dir. Every caller here is "never raises", so a refusal
+    is a logged no-op, never an exception."""
+    try:
+        from hermes_state_guard import RuntimeFileIsolationError, ensure_host_lock_file_test_isolation
+    except ImportError:  # pragma: no cover - stripped installs
+        return True
+    try:
+        ensure_host_lock_file_test_isolation(path)
+    except RuntimeFileIsolationError as exc:
+        logger.debug("%s", exc)
+        return False
+    return True
+
+
 def read_host_obligation() -> Optional[dict]:
     """The published obligation record, or ``None`` when absent/corrupt/foreign-versioned."""
     path = host_obligation_path()
@@ -79,7 +95,7 @@ def amend_host_obligation(**fields: Any) -> None:
     """Merge ``fields`` into the armed record (test/diagnostic surface). Never raises."""
     record = read_host_obligation()
     path = host_obligation_path()
-    if record is None or path is None:
+    if record is None or path is None or not _guard_host_lock_dir_write(path):
         return
     record.update(fields)
     try:
@@ -99,7 +115,7 @@ def write_host_obligation(
     ``restarted`` proof) instead of resetting it: the host owes one restart, not one per profile.
     """
     path = host_obligation_path()
-    if path is None:
+    if path is None or not _guard_host_lock_dir_write(path):
         return False
     existing = read_host_obligation()
     if existing is not None and expected_sha and existing.get("expected_sha") == expected_sha:
@@ -135,7 +151,7 @@ def write_host_obligation(
 def clear_host_obligation() -> None:
     """Discharge the obligation for the whole host. Never raises."""
     path = host_obligation_path()
-    if path is None:
+    if path is None or not _guard_host_lock_dir_write(path):
         return
     try:
         path.unlink(missing_ok=True)
@@ -164,7 +180,7 @@ def mark_host_restart_completed(sha: str) -> None:
     """Record that the host process was restarted onto ``sha``. Never raises."""
     record = read_host_obligation()
     path = host_obligation_path()
-    if record is None or path is None:
+    if record is None or path is None or not _guard_host_lock_dir_write(path):
         return
     record["restarted"] = {"sha": sha or "", "pid": os.getpid(), "at": time.time()}
     try:

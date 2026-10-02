@@ -252,6 +252,9 @@ def _write_gateway_desired_state(name: str, desired_state: str) -> None:
     """
     profile_dir = _profile_dir_for_gateway_service(name)
     state_file = profile_dir / "gateway_state.json"
+    from hermes_state_guard import ensure_runtime_file_test_isolation
+
+    ensure_runtime_file_test_isolation(state_file)  # LOCAL PATCH (PATCH-023): not an OSError, raises
     try:
         if not profile_dir.exists():
             return

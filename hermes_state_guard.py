@@ -126,6 +126,183 @@ def _is_production_state_db(resolved: Path, root: Path) -> bool:
     return len(parts) == 3 and parts[0] == "profiles"
 
 
+# ── Runtime identity files (``gateway_state.json``) ─────────────────────────────────────────
+# LOCAL PATCH (PATCH-023). Tests that wipe/rewrite ``os.environ`` re-aim every call-time path
+# resolver (HERMES_HOME → HOME → passwd) at the operator's live root, and a pytest pid then lands
+# in the live gateway's status record. "Production" is therefore judged by roots a test cannot
+# move: the root at import time (tests/conftest.py imports this module first thing, before any
+# test body can rewrite HOME), the passwd home, the sudo invoker's home, and the conftest-exported
+# custom pre-sandbox root. The CURRENT HOME is deliberately not a root: a test that points HOME
+# at a tmp dir owns that tree.
+
+#: Platform-default root this process launched with (captured once, before any test body runs).
+_LAUNCH_PLATFORM_STATE_ROOT: Optional[Path] = _real_platform_state_root()
+#: Conftest-managed knobs, mirroring ``hermes_state``'s state.db guard knobs.
+_RUNTIME_FILE_GUARD_BYPASS = False
+_RUNTIME_FILE_GUARD_EXTRA_DENY_ROOTS: tuple = ()
+
+
+class RuntimeFileIsolationError(RuntimeError):
+    """A test-context process tried to write a runtime identity file under a production root."""
+
+
+def in_runtime_file_test_context() -> bool:
+    """Env/ancestry test context, OR this very process being pytest: a test that wipes
+    ``os.environ`` drops every PYTEST_* signal and ancestry only walks parents."""
+    return _in_test_context() or "_pytest" in sys.modules
+
+
+def custom_pre_sandbox_root(pre_sandbox_home: str) -> Optional[Path]:
+    """The custom production root a pytest was launched against, or None when the launch
+    HERMES_HOME is unset or the platform default (already a production root). A custom
+    ``<root>/profiles/<name>`` home yields ``<root>`` so its sibling profiles are covered too.
+    Used by the hermetic conftest for both the state.db and the runtime-file deny lists."""
+    if not pre_sandbox_home.strip():
+        return None
+    try:
+        home = Path(pre_sandbox_home).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    root = home.parent.parent if home.parent.name == "profiles" else home
+    launch = _LAUNCH_PLATFORM_STATE_ROOT
+    if launch is not None and _same_directory(root, launch):
+        return None
+    return root
+
+
+def runtime_file_production_roots() -> set:
+    roots = set()
+    candidates = [_LAUNCH_PLATFORM_STATE_ROOT, *_RUNTIME_FILE_GUARD_EXTRA_DENY_ROOTS]
+    if sys.platform != "win32":
+        try:
+            import pwd
+
+            candidates.append(Path(pwd.getpwuid(os.getuid()).pw_dir) / ".hermes")
+        except (ImportError, KeyError, OSError):
+            pass  # no passwd entry (containers with arbitrary uids): the launch root still holds
+    try:
+        import hermes_constants
+
+        candidates.append(hermes_constants.sudo_invoker_default_home())
+    except ImportError:
+        pass
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            roots.add(Path(candidate).expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return roots
+
+
+def _same_directory(left: Path, right: Path) -> bool:
+    """Directory identity, not spelling: ``resolve()`` sees neither bind mounts nor case folding
+    (macOS/Windows), so an aliased spelling of a production root must still match."""
+    if left == right:
+        return True
+    try:
+        return os.path.samefile(left, right)
+    except OSError:  # either side missing: fall back to the platform's case rules
+        return os.path.normcase(str(left)) == os.path.normcase(str(right))
+
+
+def _runtime_file_is_under_root(resolved: Path, root: Path) -> bool:
+    """``<root>/<file>`` or ``<root>/profiles/<name>/<file>``; deeper scratch paths do not match."""
+    home = resolved.parent
+    if _same_directory(home, root):
+        return True
+    return (os.path.normcase(home.parent.name) == os.path.normcase("profiles")
+            and _same_directory(home.parent.parent, root))
+
+
+# Machine-wide gateway lock dir (token-scoped locks + host rendezvous record/lock/token). It lives
+# outside HERMES_HOME (``$HERMES_GATEWAY_LOCK_DIR`` / ``$XDG_STATE_HOME`` / ``~/.local/state``), so an
+# env-wiping test falls back to the operator's live dir. Same frozen-root rule as above.
+_HOST_LOCK_DIR_PARTS = ("hermes", "gateway-locks")
+
+
+def _default_host_lock_dir(env) -> Path:
+    """``gateway.status._get_lock_dir`` minus the override: XDG (absolute only) else HOME."""
+    xdg = env.get("XDG_STATE_HOME") or ""
+    base = Path(xdg) if os.path.isabs(xdg) else Path(env.get("HOME") or os.path.expanduser("~")) / ".local" / "state"
+    return base.joinpath(*_HOST_LOCK_DIR_PARTS)
+
+
+def _launch_host_lock_dir() -> Optional[Path]:
+    """The DEFAULT lock dir at launch. An explicit ``HERMES_GATEWAY_LOCK_DIR`` is deliberately
+    ignored: under pytest it is the conftest's per-test sandbox, inherited by spawned children."""
+    try:
+        return _default_host_lock_dir(os.environ).resolve()
+    except Exception:
+        return None
+
+
+#: Lock dir this process launched with (captured with the launch root, before any test body).
+_LAUNCH_HOST_LOCK_DIR: Optional[Path] = _launch_host_lock_dir()
+
+
+def host_lock_dir_production_roots() -> set:
+    dirs = [_LAUNCH_HOST_LOCK_DIR]
+    if sys.platform != "win32":
+        try:
+            import pwd
+
+            dirs.append(Path(pwd.getpwuid(os.getuid()).pw_dir).joinpath(".local", "state", *_HOST_LOCK_DIR_PARTS))
+        except (ImportError, KeyError, OSError):
+            pass
+    try:
+        import hermes_constants
+
+        invoker = hermes_constants.sudo_invoker_default_home()
+        if invoker is not None:
+            dirs.append(invoker.parent.joinpath(".local", "state", *_HOST_LOCK_DIR_PARTS))
+    except ImportError:
+        pass
+    roots = set()
+    for candidate in dirs:
+        if candidate is None:
+            continue
+        try:
+            roots.add(Path(candidate).expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return roots
+
+
+def ensure_host_lock_file_test_isolation(path: Path) -> None:
+    """Raise when a test-context process is about to create, rewrite or delete a file directly
+    inside a production gateway lock dir. Production returns immediately."""
+    if (_RUNTIME_FILE_GUARD_BYPASS or os.environ.get(_STATE_DB_GUARD_BYPASS_ENV)
+            or not in_runtime_file_test_context()):
+        return
+    resolved = Path(path).expanduser().resolve()
+    for root in host_lock_dir_production_roots():
+        if _same_directory(resolved.parent, root) or _same_directory(resolved, root):
+            raise RuntimeFileIsolationError(
+                f"live-system guard: test attempted to touch production gateway lock file {resolved} "
+                f"(live lock dir {root}). Point HERMES_GATEWAY_LOCK_DIR at a temporary dir, mark the "
+                "test @pytest.mark.live_system_guard_bypass, or export "
+                f"{_STATE_DB_GUARD_BYPASS_ENV}=1 in a spawned child.")
+
+
+def ensure_runtime_file_test_isolation(path: Path) -> None:
+    """Raise when a test-context process is about to write ``path`` under a production root
+    (``<root>/<file>`` or ``<root>/profiles/<name>/<file>``). Production returns immediately."""
+    if (_RUNTIME_FILE_GUARD_BYPASS or os.environ.get(_STATE_DB_GUARD_BYPASS_ENV)
+            or not in_runtime_file_test_context()):
+        return
+    resolved = Path(path).expanduser().resolve()
+    for root in runtime_file_production_roots():
+        if _runtime_file_is_under_root(resolved, root):
+            raise RuntimeFileIsolationError(
+                f"live-system guard: test attempted to write production runtime file {resolved} "
+                f"(under real Hermes root {root}). Use a temporary HERMES_HOME, mark the test "
+                f"@pytest.mark.live_system_guard_bypass, or export {_STATE_DB_GUARD_BYPASS_ENV}=1 "
+                "in a spawned child (a child launched with HOME=<tmp> treats <tmp>/.hermes as its "
+                "launch root, so it needs that export too).")
+
+
 # Test-only SessionDB instance registry. Under the hermetic suite every
 # successfully constructed SessionDB is added to this WeakSet so the autouse
 # teardown in tests/conftest.py (_close_leaked_session_dbs) can close whatever

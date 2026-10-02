@@ -162,6 +162,10 @@ def _maybe_migrate_legacy_gateway_run_state(
         return None
     if not dry_run:
         import time
+
+        from hermes_state_guard import ensure_runtime_file_test_isolation
+
+        ensure_runtime_file_test_isolation(state_file)  # LOCAL PATCH (PATCH-023)
         state_file.write_text(json.dumps({
             "gateway_state": "running",
             "desired_state": "running",

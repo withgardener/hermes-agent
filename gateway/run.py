@@ -5207,7 +5207,8 @@ async def _start_gateway_replace_existing_instance(existing_pid: int, replace: b
     remove_pid_file()
     # remove_pid_file() is a no-op when the PID doesn't match; force-unlink covers a crashed old process.
     with suppress(Exception):
-        (get_hermes_home() / "gateway.pid").unlink(missing_ok=True)
+        from gateway.status import _unlink_identity_file_quietly
+        _unlink_identity_file_quietly(get_hermes_home() / "gateway.pid")  # LOCAL PATCH (PATCH-023)
     # The old process may not have consumed the marker (SIGKILL'd before its handler read it).
     _clear_takeover_marker_quiet()
     # Stopped (Ctrl+Z) processes don't release scoped locks on exit; stale lock files block the new gateway.

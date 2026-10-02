@@ -36,6 +36,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# LOCAL PATCH (PATCH-023): import the live-system guard NOW, while HOME is still the HOME pytest
+# was launched with. It freezes the operator's real Hermes root at import; a lazy first import
+# from inside a test that rewrote HOME would freeze a tmp dir instead.
+import hermes_state_guard  # noqa: E402,F401
+
 
 # ── Sandbox HERMES_HOME before ANY test module is imported ──────────────────
 # `hermes_cli/main.py` calls `setup_logging()` at MODULE level, which resolves
@@ -931,8 +936,20 @@ def _kanban_write_guard(_hermetic_environment, monkeypatch):
 # without this fixture.
 
 
+#: The custom (non-default) production root this pytest was launched against, if any; one
+#: derivation shared by the state.db and runtime-file guards (PATCH-023).
+_CUSTOM_DENY_ROOTS = tuple(
+    root for root in (hermes_state_guard.custom_pre_sandbox_root(_PRE_SANDBOX_HERMES_HOME),)
+    if root is not None)
+
+
 @pytest.fixture(autouse=True)
 def _state_db_write_guard(request, monkeypatch):
+    # LOCAL PATCH (PATCH-023): the runtime-file guard (gateway_state.json writers) shares the
+    # state.db guard's escape-hatch marker and custom-root deny list.
+    bypass = request.node.get_closest_marker("live_system_guard_bypass") is not None
+    monkeypatch.setattr(hermes_state_guard, "_RUNTIME_FILE_GUARD_BYPASS", bypass)
+    monkeypatch.setattr(hermes_state_guard, "_RUNTIME_FILE_GUARD_EXTRA_DENY_ROOTS", _CUSTOM_DENY_ROOTS)
     _hs = sys.modules.get("hermes_state")
     if _hs is None or not hasattr(_hs, "_STATE_DB_GUARD_BYPASS"):
         yield
@@ -941,16 +958,7 @@ def _state_db_write_guard(request, monkeypatch):
         monkeypatch.setattr(_hs, "_STATE_DB_GUARD_BYPASS", True)
         yield
         return
-    extra_roots = []
-    if _PRE_SANDBOX_HERMES_HOME and not _hermes_home_points_at_production(
-        _PRE_SANDBOX_HERMES_HOME
-    ):
-        extra_roots.append(
-            Path(_PRE_SANDBOX_HERMES_HOME).expanduser().resolve()
-        )
-    monkeypatch.setattr(
-        _hs, "_STATE_DB_GUARD_EXTRA_DENY_ROOTS", tuple(extra_roots)
-    )
+    monkeypatch.setattr(_hs, "_STATE_DB_GUARD_EXTRA_DENY_ROOTS", _CUSTOM_DENY_ROOTS)
     yield
 
 

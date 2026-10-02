@@ -122,7 +122,7 @@ class _RuntimeStatusWriter:
                 self._writing_generation = generation
             error: Optional[BaseException] = None
             try:
-                (self._write_fn or _write_json_file)(path, _merge_over_on_disk(path, payload))
+                (self._write_fn or _write_runtime_status_file)(path, _merge_over_on_disk(path, payload))
             except BaseException as exc:
                 error = exc
             with self._condition:
@@ -762,9 +762,45 @@ def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
     atomic_json_write(path, payload, indent=None, separators=(",", ":"))
 
 
+def _guard_identity_file(path: Path) -> None:
+    """LOCAL PATCH (PATCH-023): a pytest-context process that lost its sandboxed HERMES_HOME (a
+    test cleared ``os.environ``) resolves the operator's live identity files (status, PID, lock,
+    markers); refuse to create, rewrite or delete them. No-op outside a test context."""
+    from hermes_state_guard import ensure_runtime_file_test_isolation
+
+    ensure_runtime_file_test_isolation(path)
+
+
+def _guard_lock_dir_file(path: Path) -> None:
+    """LOCAL PATCH (PATCH-023): same refusal for the machine-wide lock dir (outside HERMES_HOME)."""
+    from hermes_state_guard import ensure_host_lock_file_test_isolation
+
+    ensure_host_lock_file_test_isolation(path)
+
+
+def _write_runtime_status_file(path: Path, payload: dict[str, Any]) -> None:
+    """Checked here on the writer thread, not where the path was resolved (the env may differ)."""
+    _guard_identity_file(path)
+    _write_json_file(path, payload)
+
+
 def _unlink_quietly(path: Path) -> None:
     with contextlib.suppress(OSError):
         path.unlink(missing_ok=True)
+
+
+def _unlink_identity_file_quietly(path: Path) -> None:
+    """LOCAL PATCH (PATCH-023): housekeeping unlink of an identity file (stale PID/lock, expired or
+    consumed marker). Runs on READ paths (``get_running_pid``, marker consume), so a test-context
+    refusal skips the unlink silently instead of raising into the caller."""
+    from hermes_state_guard import RuntimeFileIsolationError
+
+    try:
+        _guard_identity_file(path)
+    except RuntimeFileIsolationError:
+        logger.debug("live-system guard: left production identity file %s in place", path)
+        return
+    _unlink_quietly(path)
 
 
 def _read_pid_record(pid_path: Optional[Path] = None) -> Optional[dict]:
@@ -817,7 +853,7 @@ def _cleanup_invalid_pid_path(pid_path: Path, *, cleanup_stale: bool) -> None:
     _clear_running_pid_cache()
     for path in (pid_path, _get_gateway_lock_path(pid_path)):
         with contextlib.suppress(Exception):
-            path.unlink(missing_ok=True)
+            _unlink_identity_file_quietly(path)
 
 
 def _try_acquire_file_lock(handle) -> bool:
@@ -944,6 +980,7 @@ def acquire_gateway_runtime_lock() -> bool:
     if _gateway_lock_handle is not None:
         return True
     path = _get_gateway_lock_path()
+    _guard_identity_file(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         handle = open(path, "a+", encoding="utf-8")
@@ -1010,7 +1047,7 @@ def is_gateway_runtime_lock_active(lock_path: Optional[Path] = None) -> bool:
         handle = open(resolved_lock_path, "a+", encoding="utf-8")
     except PermissionError:
         # Stale root-owned lock (see acquire_gateway_runtime_lock): report inactive.
-        _unlink_quietly(resolved_lock_path)
+        _unlink_identity_file_quietly(resolved_lock_path)
         return False
     return _probe_lock_file(handle)
 
@@ -1044,6 +1081,7 @@ def write_pid_file() -> None:
     """Write this process's PID record via O_CREAT|O_EXCL; a racing gateway's FileExistsError
     propagates for the caller to decide."""
     path = _get_pid_path()
+    _guard_identity_file(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_excl(path, _build_pid_record())
     _clear_running_pid_cache()
@@ -1481,6 +1519,7 @@ def remove_pid_file() -> None:
         file_pid = _pid_from_record(_read_json_file(path))
         if file_pid is not None and file_pid != os.getpid():
             return  # Belongs to a different process — leave it alone.
+        _guard_identity_file(path)  # raising here (suppressed) leaves a production file alone
         path.unlink(missing_ok=True)
         _clear_running_pid_cache()
 
@@ -1520,6 +1559,7 @@ def acquire_scoped_lock(
 ) -> tuple[bool, Optional[dict[str, Any]]]:
     """Acquire a machine-local lock keyed by scope + identity (one Telegram token across homes)."""
     lock_path = _get_scope_lock_path(scope, identity)
+    _guard_lock_dir_file(lock_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         **_build_pid_record(), "scope": scope, "identity_hash": _scope_hash(identity),
@@ -1568,6 +1608,7 @@ def release_scoped_lock(scope: str, identity: str) -> None:
     fingerprint would wedge reconnects."""
     lock_path = _get_scope_lock_path(scope, identity)
     if (_read_json_file(lock_path) or {}).get("pid") == os.getpid():
+        _guard_lock_dir_file(lock_path)
         _unlink_quietly(lock_path)
 
 
@@ -1579,6 +1620,7 @@ def release_all_scoped_locks(
     lock_dir = _get_lock_dir()
     if not lock_dir.exists():
         return 0
+    _guard_lock_dir_file(lock_dir / "*.lock")
     removed = 0
     for lock_file in lock_dir.glob("*.lock"):
         if owner_pid is not None:
@@ -1634,7 +1676,7 @@ def _read_live_pid_marker(path: Path, ttl_s: int) -> Optional[tuple[dict[str, An
         return None
     target_pid = _pid_from_record(record, "target_pid")
     if target_pid is None or _marker_is_stale(record.get("written_at") or "", ttl_s):
-        _unlink_quietly(path)
+        _unlink_identity_file_quietly(path)
         return None
     return record, target_pid, record.get("target_start_time")
 
@@ -1670,7 +1712,7 @@ def _consume_pid_marker_for_self(path: Path, *, ttl_s: int) -> bool:
         if replacer_home is not None and not _same_hermes_home(replacer_home, our_home):
             return False
     matches = _pid_marker_names_self(target_pid, target_start_time)
-    _unlink_quietly(path)
+    _unlink_identity_file_quietly(path)
     return matches
 
 
@@ -1696,7 +1738,9 @@ def write_takeover_marker(
 
 
 def _write_marker(path: Path, record: dict[str, Any]) -> bool:
-    """Atomically write a marker record; False (never raise) on OS failure."""
+    """Atomically write a marker record; False on OS failure. A test-context write into a production
+    home raises ``RuntimeFileIsolationError`` (PATCH-023) — deliberately not swallowed."""
+    _guard_identity_file(path)
     try:
         _write_json_file(path, record)
         return True
@@ -1711,7 +1755,9 @@ def consume_takeover_marker_for_self() -> bool:
 
 def clear_takeover_marker(target_home: Optional[Path] = None) -> None:
     """Remove the takeover marker unconditionally. Safe to call repeatedly."""
-    _unlink_quietly(_get_takeover_marker_path(target_home))
+    path = _get_takeover_marker_path(target_home)
+    _guard_identity_file(path)
+    _unlink_quietly(path)
 
 
 def _validated_scoped_lock_gateway_owner(record: dict[str, Any]) -> Optional[tuple[int, int, Path]]:
@@ -2047,8 +2093,10 @@ def get_running_pid_cached(
 
 def clear_planned_stop_marker() -> None:
     """Remove the planned-stop marker unconditionally."""
+    path = _get_planned_stop_marker_path()
+    _guard_identity_file(path)
     try:
-        _get_planned_stop_marker_path().unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
     except OSError:
         pass
 

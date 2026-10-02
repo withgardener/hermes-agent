@@ -834,6 +834,9 @@ def _reconcile_standalone_runtime(default_home: Path, secondary_names: set[str])
             key: value for key, value in platforms.items()
             if not (isinstance(key, str) and key.startswith(prefixes))
         }
+    from hermes_state_guard import ensure_runtime_file_test_isolation
+
+    ensure_runtime_file_test_isolation(path)  # LOCAL PATCH (PATCH-023)
     atomic_json_write(path, runtime, indent=None, separators=(",", ":"))
 
 
