@@ -3936,7 +3936,20 @@ class BasePlatformAdapter(ABC):
             # Send BEFORE cancelling so cancellation side effects can't drop the "/new"
             # confirmation.
             await self._dispatch_inline_reply(event, log_cmd=cmd)
+            # HERMES_FEISHU_CARD_BASE_STOP_CANCEL_PATCH_BEGIN
+            _hfc_stop_owner = None
+            try:
+                from hermes_feishu_card.hook_runtime import capture_stop_cancellation as _hfc_capture_stop
+                _hfc_stop_owner = _hfc_capture_stop(self, event, session_key, cmd)
+            except Exception:
+                pass
             await self.cancel_session_processing(session_key, release_guard=False, discard_pending=False)
+            try:
+                from hermes_feishu_card.hook_runtime import schedule_cancelled_stop_turn as _hfc_schedule_stop
+                _hfc_schedule_stop(self, _hfc_stop_owner)
+            except Exception:
+                pass
+            # HERMES_FEISHU_CARD_BASE_STOP_CANCEL_PATCH_END
         except Exception:
             # On failure restore the original guard so the session isn't left half-reset.
             if self._active_sessions.get(session_key) is command_guard:

@@ -2305,6 +2305,17 @@ class GatewayTurnMixin:
             await self._hmwa_stop_typing_for_turn(event, source)
 
             if not self._is_session_run_current(_quick_key, run_generation):
+                # HERMES_FEISHU_CARD_STALE_INTERRUPTED_PATCH_BEGIN
+                try:
+                    from hermes_feishu_card.hook_runtime import emit_stale_interrupted_turn_async as _hfc_emit_interrupted
+                    await _hfc_emit_interrupted(locals())
+                except Exception as _hfc_exc:
+                    try:
+                        import sys as _hfc_sys
+                        print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+                    except Exception:
+                        pass
+                # HERMES_FEISHU_CARD_STALE_INTERRUPTED_PATCH_END
                 self._hmwa_discard_stale_result(source, _quick_key, run_generation)
                 return None
 
@@ -4356,6 +4367,18 @@ class GatewayTurnMixin:
                 session_key, agent_holder[0], _executor_task_holder[0]
             ):
                 break
+            # HERMES_FEISHU_CARD_TASK_HEARTBEAT_PATCH_BEGIN
+            try:
+                from hermes_feishu_card.hook_runtime import suppress_task_heartbeat_async as _hfc_suppress_heartbeat
+                if await _hfc_suppress_heartbeat(source):
+                    continue
+            except Exception as _hfc_exc:
+                try:
+                    import sys as _hfc_sys
+                    print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+                except Exception:
+                    pass
+            # HERMES_FEISHU_CARD_TASK_HEARTBEAT_PATCH_END
             _elapsed_mins = int((time.time() - _notify_start) // 60)
             # Terse heartbeat by default; the iteration counter is gated on busy_ack_detail.
             _status_detail = ""

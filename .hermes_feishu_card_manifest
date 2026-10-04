@@ -13,7 +13,7 @@
       "path": "gateway/run_turn.py",
       "backup": "gateway/run_turn.py.hermes_feishu_card.bak",
       "original_sha256": "5bdee5c82c00e02f664516f9da0af99674e23493ec2a30eff06cb03afc6718a0",
-      "patched_sha256": "611724266401e12930b62bc4fc5aa37c886d9bede3429458e5eba6c1c70b2b1e"
+      "patched_sha256": "4e5ca8523070eb05d931a0af066c1c7929e31f14307ff1f2aacbb5e47aa8dcca"
     },
     "gateway/run_turn_runner.py": {
       "path": "gateway/run_turn_runner.py",
@@ -61,7 +61,7 @@
       "path": "gateway/platforms/base.py",
       "backup": "gateway/platforms/base.py.hermes_feishu_card.bak",
       "original_sha256": "502a8371735acfb016968d6df5bac3394b21d292f1b64b5a988df3dafeb7549f",
-      "patched_sha256": "54e140ce6ec773433162a1debf3c231143c239047f3f137b3d7b94abc8284c31"
+      "patched_sha256": "60e2c68d49e0be3c1d032ce606519316513388eacffdde07fdd11fdf5e6a4095"
     }
   },
   "integrity": {
@@ -75,7 +75,7 @@
       },
       "gateway/run_turn.py": {
         "original_sha256": "5bdee5c82c00e02f664516f9da0af99674e23493ec2a30eff06cb03afc6718a0",
-        "patched_sha256": "611724266401e12930b62bc4fc5aa37c886d9bede3429458e5eba6c1c70b2b1e"
+        "patched_sha256": "4e5ca8523070eb05d931a0af066c1c7929e31f14307ff1f2aacbb5e47aa8dcca"
       },
       "gateway/run_turn_runner.py": {
         "original_sha256": "d600c725c8dd626e95af4adefb659cc6c4d41d35aa6e517eb64395e6fa04f92e",
@@ -107,7 +107,7 @@
       },
       "gateway/platforms/base.py": {
         "original_sha256": "502a8371735acfb016968d6df5bac3394b21d292f1b64b5a988df3dafeb7549f",
-        "patched_sha256": "54e140ce6ec773433162a1debf3c231143c239047f3f137b3d7b94abc8284c31"
+        "patched_sha256": "60e2c68d49e0be3c1d032ce606519316513388eacffdde07fdd11fdf5e6a4095"
       }
     }
   }
