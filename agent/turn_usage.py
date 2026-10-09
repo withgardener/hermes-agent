@@ -187,6 +187,10 @@ def record_response_usage(
         ohist = getattr(agent, "_api_output_history", None)
         if ohist is not None:
             ohist.append(int(canonical_usage.output_tokens or 0))
+        # PATCH-007: retain the last ten per-call (prompt, cache-read) pairs for card cache rate.
+        chist = getattr(agent, "_api_cache_history", None)
+        if chist is not None:
+            chist.append((int(prompt_tokens or 0), int(canonical_usage.cache_read_tokens or 0)))
 
     _cache_pct = ""
     if canonical_usage.cache_read_tokens and prompt_tokens:

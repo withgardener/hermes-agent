@@ -495,11 +495,22 @@ class GatewayBusySessionMixin:
     async def _send_busy_reply(self, event: MessageEvent, adapter, content: str, *, plain_anchor: bool = False) -> None:
         """Send a busy-path reply anchored to the event (thread metadata included)."""
         reply_anchor = self._reply_anchor_for_event(event)
-        await adapter._send_with_retry(
+        # HERMES_FEISHU_CARD_BUSY_RECALL_PATCH_BEGIN_V1
+        _hfc_recall_result = await adapter._send_with_retry(
             chat_id=event.source.chat_id, content=content,
             reply_to=reply_anchor if plain_anchor else self._busy_reply_to(event, reply_anchor),
             metadata=self._thread_metadata_for_source(event.source, reply_anchor),
         )
+        try:
+            from hermes_feishu_card.hook_runtime import recall_busy_redirect_ack_async as _hfc_recall_ack
+            await _hfc_recall_ack(event, content, _hfc_recall_result)
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_BUSY_RECALL_PATCH_END_V1
 
     async def _send_busy_drain_notice(self, event: MessageEvent, session_key: str, effective_mode: str) -> None:
         """Busy path while the gateway is restarting/stopping: queue (if allowed) and tell the user."""
@@ -1370,6 +1381,43 @@ class GatewayBusySessionMixin:
 
         # Register FIRST so a fast button click cannot race the send_slash_confirm return.
         _slash_confirm_mod.register(session_key, confirm_id, command, handler)
+        # HERMES_FEISHU_CARD_SLASH_CONFIRM_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import request_slash_confirm_from_hermes_locals_async as _hfc_request_slash_confirm
+            from hermes_feishu_card.hook_runtime import complete_command_card_from_hermes_locals_async as _hfc_complete_command_card
+            from hashlib import sha256 as _hfc_sha256
+            _hfc_slash_reply_to = None
+            try:
+                _hfc_slash_reply_to = self._reply_anchor_for_event(event)
+            except Exception:
+                _hfc_slash_reply_to = getattr(event, "message_id", None)
+            _hfc_slash_interaction_seed = (str(session_key) + ":" + str(confirm_id)).encode("utf-8")
+            _hfc_slash_interaction_id = "slash_" + _hfc_sha256(_hfc_slash_interaction_seed).hexdigest()[:16]
+            _hfc_slash_choice = await _hfc_request_slash_confirm({
+                **locals(),
+                "source": source,
+                "chat_id": getattr(source, "chat_id", ""),
+                "conversation_id": session_key,
+                "message_id": _hfc_slash_reply_to,
+                "reply_to_message_id": _hfc_slash_reply_to,
+            }, command=command, title=title, message=message, interaction_id=_hfc_slash_interaction_id)
+            if _hfc_slash_choice in {"once", "always", "cancel"}:
+                _hfc_slash_result = await handler(_hfc_slash_choice)
+                if await _hfc_complete_command_card({
+                    "source": source,
+                    "chat_id": getattr(source, "chat_id", ""),
+                    "conversation_id": session_key,
+                    "message_id": _hfc_slash_reply_to,
+                }, answer=_hfc_slash_result):
+                    return None
+                return _hfc_slash_result
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_SLASH_CONFIRM_PATCH_END
 
         adapter = self._delivery_adapter_for(source)
         metadata = self._thread_metadata_for_source(source, self._reply_anchor_for_event(event))

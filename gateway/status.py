@@ -578,6 +578,10 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
         return "run"
     if any(b in ("hermes-gateway", "hermes-gateway.exe") for b in basenames):
         return "run"
+    # PATCH-006: our systemd launch uses a Python gateway-named overlay script, which otherwise
+    # lacks a hermes entrypoint token in /proc cmdline and is missed by strict process identity.
+    if any(b.endswith(".py") and "gateway" in b for b in basenames):
+        return "run"
     joined = " ".join(tokens)
     if "hermes_cli.main" not in joined and "hermes_cli/main.py" not in joined and not any(
         b in ("hermes", "hermes.exe") for b in basenames

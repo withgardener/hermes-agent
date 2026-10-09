@@ -4024,7 +4024,20 @@ class BasePlatformAdapter(ABC):
             # Send BEFORE cancelling so cancellation side effects can't drop the "/new"
             # confirmation.
             await self._dispatch_inline_reply(event, log_cmd=cmd)
+            # HERMES_FEISHU_CARD_BASE_STOP_CANCEL_PATCH_BEGIN
+            _hfc_stop_owner = None
+            try:
+                from hermes_feishu_card.hook_runtime import capture_stop_cancellation as _hfc_capture_stop
+                _hfc_stop_owner = _hfc_capture_stop(self, event, session_key, cmd)
+            except Exception:
+                pass
             await self.cancel_session_processing(session_key, release_guard=False, discard_pending=False)
+            try:
+                from hermes_feishu_card.hook_runtime import schedule_cancelled_stop_turn as _hfc_schedule_stop
+                _hfc_schedule_stop(self, _hfc_stop_owner)
+            except Exception:
+                pass
+            # HERMES_FEISHU_CARD_BASE_STOP_CANCEL_PATCH_END
         except Exception:
             # On failure restore the original guard so the session isn't left half-reset.
             if self._active_sessions.get(session_key) is command_guard:
@@ -4393,6 +4406,25 @@ class BasePlatformAdapter(ABC):
             event, session_key, text_content, delivery_adapter, is_ephemeral_response)
         if obligation_id is not None:
             await self._release_turn_marker(event)  # the ledger now owns the crash recovery
+        # HERMES_FEISHU_CARD_EXACT_BASE_FINAL_DELIVERY_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import prepare_decomposed_base_final_delivery as _hfc_prepare_exact_base_final_delivery
+            delivery_adapter, text_content, reply_to, metadata = await _hfc_prepare_exact_base_final_delivery({
+                **locals(),
+                "source": event.source,
+                "delivery_adapter": delivery_adapter,
+                "content": text_content,
+                "obligation_id": obligation_id,
+                "reply_to": reply_to,
+                "metadata": metadata,
+            })
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_EXACT_BASE_FINAL_DELIVERY_PATCH_END
         result = await delivery_adapter._send_with_retry(
             chat_id=event.source.chat_id, content=text_content, reply_to=reply_to, metadata=metadata)
         stop_reply_clock(delivery_adapter, event.source.chat_id, result)
@@ -4627,6 +4659,24 @@ class BasePlatformAdapter(ABC):
                 if text_content or extracted.images or extracted.media_files or extracted.local_files \
                         or _tts_paths or _tts_caption_delivered:
                     self.pause_typing_for_chat(event.source.chat_id)
+                # HERMES_FEISHU_CARD_EXACT_BASE_NO_TEXT_PATCH_BEGIN
+                try:
+                    from hermes_feishu_card.hook_runtime import capture_decomposed_base_context as _hfc_capture_base
+                    images, local_files = extracted.images, extracted.local_files
+                    _hfc_capture_base(locals())
+                    from hermes_feishu_card.hook_runtime import finalize_exact_base_no_text as _hfc_finalize_exact_base_no_text
+                    if not text_content or _tts_caption_delivered:
+                        await _hfc_finalize_exact_base_no_text({
+                            **locals(),
+                            "source": event.source,
+                        })
+                except Exception as _hfc_exc:
+                    try:
+                        import sys as _hfc_sys
+                        print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+                    except Exception:
+                        pass
+                # HERMES_FEISHU_CARD_EXACT_BASE_NO_TEXT_PATCH_END
                 if text_content and not _tts_caption_delivered:
                     await self._send_final_text(
                         event, session_key, text_content, _final_thread_metadata,

@@ -76,6 +76,8 @@ class ClarifyThenToolAgent:
 
     def __init__(self, **kwargs):
         self.tool_progress_callback = kwargs.get("tool_progress_callback")
+        self.tool_start_callback = kwargs.get("tool_start_callback")
+        self.tool_complete_callback = kwargs.get("tool_complete_callback")
         self.tools = []
 
     def run_conversation(self, message, conversation_history=None, task_id=None):
@@ -88,6 +90,15 @@ class ClarifyThenToolAgent:
                 {"question": "Which environment?", "choices": ["staging", "production"]},
             )
             cb("tool.started", "terminal", "pwd", {})
+            # LOCAL PATCH (HFC STABLE_TOOL hook, see LOCAL-PATCHES.md PATCH-020):
+            # the real AIAgent also fires the stable-ID tool_start_callback per
+            # call (agent/tool_executor.py). With the HFC hook installed,
+            # progress "tool.started" is swallowed and the bubble is driven from
+            # this callback instead, so the fake must fire it like production.
+            sc = self.tool_start_callback
+            if callable(sc):
+                sc("call-clarify", "clarify", {"question": "Which environment?", "choices": ["staging", "production"]})
+                sc("call-terminal", "terminal", {"command": "pwd"})
             if not type(self).adapter.delivered.wait(timeout=5.0):
                 raise AssertionError("progress task never delivered a bubble")
         return {"final_response": "done", "messages": [], "api_calls": 1}

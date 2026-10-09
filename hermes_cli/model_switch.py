@@ -753,6 +753,18 @@ def resolve_alias(raw_input: str, current_provider: str, user_providers: Optiona
     if direct is not None:
         return (direct.provider, direct.model, key)
 
+    # PATCH-009: /model main returns to the live configured default; explicit user alias wins above.
+    if key == "main":
+        try:
+            from hermes_cli.config import load_config
+            model_cfg = load_config().get("model") or {}
+            default = _clean(model_cfg.get("default") or model_cfg.get("model"))
+            if default:
+                provider = _clean(model_cfg.get("provider")) or "custom"
+                return (provider, default, "main")
+        except Exception:
+            pass
+
     # Reverse lookup so full names ("kimi-k2.5") route through direct aliases instead of
     # falling through to the catalog/OpenRouter. Several aliases may expose one model id on
     # different providers: prefer the one served by current_provider, since insertion order is

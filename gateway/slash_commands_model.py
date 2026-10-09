@@ -589,6 +589,11 @@ class GatewayModelCommandsMixin:
         result, error = await self._perform_model_switch(ctx, request.target, request.explicit_provider, source)
         if error is not None:
             return error
+        # PATCH-022: preserve cache-warm context by compressing before a context-only switch guard.
+        from gateway.slash_commands_model_autocompress import maybe_auto_compress
+        auto_handled, auto_reply = await maybe_auto_compress(self, event, ctx, result)
+        if auto_handled:
+            return auto_reply
         guard_fired, guard_reply = await self._model_selection_guard_reply(event, ctx, result)
         if guard_fired:
             return guard_reply
