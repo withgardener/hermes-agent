@@ -49,6 +49,13 @@ class GatewaySessionWatchersMixin:
 
     async def _session_housekeeping(self) -> None:
         """Idle/pressure agent-cache sweeps plus the hourly SessionStore prune."""
+        # LOCAL PATCH-025: active_agents is persisted only at chat-turn boundaries, so cron/API work that
+        # ends after the last turn leaves a stale non-zero count in gateway_state.json and starves every
+        # external drain gate (supervised reload). Re-publish the live total each housekeeping pass.
+        try:
+            self._persist_active_agents()
+        except Exception as e:
+            logger.debug("active_agents refresh failed: %s", e)
         try:
             if evicted := self._sweep_idle_cached_agents():
                 logger.info("Agent cache idle sweep: evicted %d agent(s)", evicted)
