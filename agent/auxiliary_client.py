@@ -6587,6 +6587,15 @@ def _is_gemini_native_route(provider_norm: str, effective_base: str) -> bool:
         return False
 
 
+def _is_custom_openai_gateway(provider: str | None) -> bool:
+    """True for a ``custom`` / ``custom:<name>`` provider id (an OpenAI-compatible endpoint).
+
+    ``custom:<name>`` is how config names a named custom provider; both forms reach the
+    OpenAI-compatible chat-completions wire, which is where the gateway's own default output
+    ceiling applies (PATCH-032)."""
+    return str(provider or "").strip().lower().split(":", 1)[0] == "custom"
+
+
 def _forwards_max_tokens(provider: str, provider_norm: str, model: str, effective_base: str, task: Optional[str]) -> bool:
     """Whether an explicit max_tokens is forwarded on this route.
 
@@ -6594,8 +6603,9 @@ def _forwards_max_tokens(provider: str, provider_norm: str, model: str, effectiv
     quirks). Forward only where mandatory or honored: Anthropic Messages wire (400 without it);
     NVIDIA NIM (empty choices[] when omitted); MoA reference slots; Gemini native (fixed 65,535
     ceiling otherwise); OpenRouter (budgets the FULL window when omitted → 402 on low credit);
-    managed local llama-server (uncapped decode with no EOS burns the GPU to the context window).
-    """
+    managed local llama-server (uncapped decode with no EOS burns the GPU to the context window);
+    and an explicit compression cap on an OpenAI-compatible custom gateway, which otherwise applies
+    its own small default output ceiling and truncates the summary (PATCH-032)."""
     return (
         _is_anthropic_compat_endpoint(provider, effective_base)
         or _nous_on_messages_wire(provider_norm, model)
@@ -6606,6 +6616,7 @@ def _forwards_max_tokens(provider: str, provider_norm: str, model: str, effectiv
         or provider_norm == "openrouter"
         or base_url_host_matches(effective_base, "openrouter.ai")
         or _is_managed_local_endpoint(effective_base)
+        or (str(task) == "compression" and _is_custom_openai_gateway(provider))
     )
 
 

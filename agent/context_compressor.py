@@ -25,6 +25,7 @@ from agent.auxiliary_client import (
     AuxiliaryExplicitCancellation,
     _coerce_llm_message,
     _is_connection_error,
+    _is_custom_openai_gateway,
     _message_field,
     aux_interrupt_protection,
     call_llm,
@@ -819,11 +820,25 @@ _SUMMARY_RATIO = 0.20
 # Summaries above ~10K tokens are themselves a context-pressure source.
 _SUMMARY_TOKENS_CEILING = 10_000
 
+# PATCH-032 — explicit output cap on the summary call for OpenAI-compatible gateways.
+# Those gateways substitute their OWN default output ceiling when a request omits
+# ``max_tokens`` (the okhema gateway cuts Claude at exactly 8,192 completion tokens), so a
+# summary whose prompt target is above that ceiling is chopped mid-sentence and thrown away
+# as ``finish_reason=length``. Stating a cap above the prompt's own target keeps the request
+# uncut while still bounding it; every provider whose ceiling we already rely on keeps
+# omitting the field (see ``ContextCompressor._summary_wire_max_tokens``).
+_SUMMARY_WIRE_MAX_TOKENS_FLOOR = 16_000
+_SUMMARY_WIRE_MAX_TOKENS_CEILING = 64_000
+
 # After this many failures at one cursor, skip the exchange to avoid busy-looping.
 _MICRO_COMPACT_MAX_CONSECUTIVE_FAILURES = 3
 
 # Prompt-side char cap on the serialized turn block (~40K tokens; head+tail kept,
-# see _bound_summary_input). NEVER add a max_tokens wire cap on the summary call.
+# see _bound_summary_input). Do NOT add a max_tokens wire cap on routes that already give us
+# the model's full output ceiling (Anthropic/NIM wires); the one exception is an
+# OpenAI-compatible custom gateway, which replaces that ceiling with its own small default —
+# there the summary call states a cap above the prompt target (PATCH-032,
+# see _summary_wire_max_tokens).
 _SUMMARY_INPUT_MAX_CHARS = 160_000
 
 _PRUNED_TOOL_PLACEHOLDER = "[Old tool output cleared to save context space]"
@@ -3465,6 +3480,27 @@ class ContextCompressor(
         self._last_reclaim_block_warn = None
         return pruned_msgs, pruned_count
 
+    def _summary_wire_max_tokens(self, summary_budget: int) -> Optional[int]:
+        """Explicit output cap for the summary call, or None to keep omitting the field.
+
+        An OpenAI-compatible custom gateway substitutes its own default output ceiling when a
+        request omits ``max_tokens`` — the okhema gateway stops Claude at 8,192 completion tokens —
+        so a summary whose prompt target sits above that ceiling is cut mid-sentence and rejected
+        as ``finish_reason=length`` (PATCH-032). Stating twice the prompt target leaves room for the
+        target plus section structure and any reasoning tokens, with a 16K floor so a small budget
+        is never the thing that truncates, and the main model's own output limit (64K max) as the
+        ceiling. Other providers keep today's behavior: omit the field and let them use their own
+        maximum.
+        """
+        if not _is_custom_openai_gateway(self.provider):
+            return None
+        ceiling = _SUMMARY_WIRE_MAX_TOKENS_CEILING
+        model_cap = self._coerce_max_tokens(getattr(self, "max_tokens", None))
+        if model_cap is not None:
+            ceiling = min(ceiling, model_cap)
+        desired = max(_SUMMARY_WIRE_MAX_TOKENS_FLOOR, 2 * int(summary_budget))
+        return max(1, min(desired, ceiling))
+
     def _compute_summary_budget(self, turns_to_summarize: list[dict[str, Any]]) -> int:
         """Scale the summary token budget with content size and context window."""
         content_tokens = estimate_messages_tokens_rough(turns_to_summarize)
@@ -3887,7 +3923,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         self.summary_model = ""  # empty = use main model
         self._clear_compression_failure_cooldown()  # no cooldown — retry immediately
 
-    def _call_summary_llm(self, prompt: str, prompt_started_at: float) -> str:
+    def _call_summary_llm(self, prompt: str, prompt_started_at: float, summary_budget: int = 0) -> str:
         """Issue the single aux summary call; return validated content text.
         Raises RuntimeError for empty content or a length-truncated (PARTIAL) summary so the failure
         routes through main-model fallback + cooldown instead of wiping the compacted turns."""
@@ -3900,9 +3936,17 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 "api_mode": self.api_mode,
             },
             "messages": [{"role": "user", "content": prompt}], "route_info": _aux_route,
-            # NO max_tokens: Anthropic/NIM wires forward it and a hard cap truncates summaries
+            # No max_tokens by default: Anthropic/NIM wires forward it, and on the providers we
+            # rely on ("omitted = the model's own maximum") a hard cap is what truncates summaries
             # (thinking models burn it on reasoning). Timeout comes from call_llm config.
+            # The one exception is an OpenAI-compatible custom gateway, which does NOT inherit the
+            # model's maximum and cuts at its own ~8K default — there we state a cap above the
+            # prompt's target instead of leaving the gateway to pick one (PATCH-032, see
+            # _summary_wire_max_tokens).
         }
+        _wire_max_tokens = self._summary_wire_max_tokens(summary_budget)
+        if _wire_max_tokens is not None:
+            call_kwargs["max_tokens"] = _wire_max_tokens
         # Pinned route (stall fallback) replaces task routing so the retry leaves the stalled backend.
         self._apply_summary_route(call_kwargs, _pinned_summary_call_kwargs())
         # Compression is atomic: protect the in-flight summary call from a mid-turn gateway interrupt.
@@ -4013,7 +4057,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             has_user_turn = self._transcript_has_real_user_turn(turns_to_summarize)
         prompt = self._build_summary_prompt(content_to_summarize, summary_budget, focus_topic, memory_context, has_user_turn)
         try:
-            content = self._call_summary_llm(prompt, prompt_started_at)
+            content = self._call_summary_llm(prompt, prompt_started_at, summary_budget)
             # Strip <think> blocks: they would be stored, injected, and compounded on every iterative update.
             from agent.agent_runtime_helpers import strip_think_blocks
             content = strip_think_blocks(None, content).strip() or content
