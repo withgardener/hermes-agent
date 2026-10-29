@@ -4520,6 +4520,13 @@ class BasePlatformAdapter(ABC):
                                "no attachment; delivering recovered original to %s", self.name,
                                len(pre_extract), event.source.chat_id)
                 text_content = _recovered
+        # HERMES_FEISHU_CARD_ADMISSION_EXTRACT_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import capture_admission_base_extraction
+            capture_admission_base_extraction(locals())
+        except Exception:
+            pass
+        # HERMES_FEISHU_CARD_ADMISSION_EXTRACT_END
         return _ExtractedResponse(
             text_content=text_content, images=images, media_files=media_files,
             local_files=local_files, force_document_attachments=force_document, pre_extract=pre_extract)

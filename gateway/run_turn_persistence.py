@@ -577,6 +577,71 @@ class GatewayTurnPersistenceMixin:
 
         # Streamed responses still need MEDIA: files delivered (chunks carry the tags verbatim). Never
         # skip when the agent failed: the error text is new content streaming didn't show.
+        # HERMES_FEISHU_CARD_COMPLETE_PATCH_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import build_event as _hfc_build_event
+            from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_async as _hfc_emit_async
+            from hermes_feishu_card.hook_runtime import can_stage_exact_base_completion as _hfc_can_stage_exact
+            from hermes_feishu_card.hook_runtime import stage_message_completed_from_hermes_locals_async as _hfc_stage_exact
+            from hermes_feishu_card.hook_runtime import should_suppress_native_response as _hfc_should_suppress
+            from hermes_feishu_card.hook_runtime import native_media_only_response as _hfc_media_only
+            _hfc_completed_message_id = None
+            try:
+                _hfc_completed_message_id = self._reply_anchor_for_event(event)
+            except Exception:
+                _hfc_completed_message_id = getattr(event, "message_id", None)
+            _hfc_completed_locals = {
+                **locals(),
+                "message_id": _hfc_completed_message_id,
+                "answer": response,
+                "duration": agent_result.get("_hfc_turn_seconds"),
+                "model": agent_result.get("model", ""),
+                "tokens": {
+                    "input_tokens": agent_result.get("input_tokens", 0),
+                    "output_tokens": agent_result.get("output_tokens", 0),
+                },
+                "context": {
+                    "used_tokens": agent_result.get("last_prompt_tokens", 0),
+                    "max_tokens": agent_result.get("context_length", 0),
+                },
+            }
+            if agent_result.get("_hfc_queued_final_attempted") is True and agent_result.get("_hfc_queued_final_delivered") is not True:
+                return response
+            if agent_result.get("_hfc_queued_final_delivered") is True:
+                _hfc_queued_preview = _hfc_build_event("message.completed", _hfc_completed_locals, preview=True)
+                if _hfc_queued_preview and _hfc_queued_preview.get("data", {}).get("native_delivery") == "required":
+                    return _hfc_media_only(response)
+                return None
+            from hermes_feishu_card.hook_runtime import admission_completion_mode as _hfc_admission_mode
+            _hfc_admission = _hfc_admission_mode(_hfc_completed_locals)
+            if _hfc_admission == "native":
+                return response
+            _hfc_exact_staged = False
+            if _hfc_can_stage_exact(_hfc_completed_locals):
+                _hfc_exact_staged = await _hfc_stage_exact(_hfc_completed_locals)
+            if _hfc_admission == "handoff" and not _hfc_exact_staged:
+                return response
+            if not _hfc_exact_staged:
+                _hfc_completed_event = _hfc_build_event("message.completed", _hfc_completed_locals, preview=True)
+                _hfc_attachments = []
+                _hfc_native_delivery = "allowed"
+                if _hfc_completed_event is not None:
+                    _hfc_completed_data = _hfc_completed_event.get("data", {})
+                    _hfc_attachments = _hfc_completed_data.get("attachments", [])
+                    _hfc_native_delivery = _hfc_completed_data.get("native_delivery", "required" if _hfc_attachments else "allowed")
+                _hfc_card_delivered = await _hfc_emit_async(_hfc_completed_locals, event_name="message.completed")
+                _hfc_platform = getattr(source.platform, "value", source.platform)
+                if str(_hfc_platform).lower() == "feishu" and _hfc_card_delivered and _hfc_native_delivery == "required":
+                    response = _hfc_media_only(response)
+                if _hfc_should_suppress(_hfc_platform, _hfc_card_delivered, _hfc_attachments, _hfc_native_delivery):
+                    return None
+        except Exception as _hfc_exc:
+            try:
+                import sys as _hfc_sys
+                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
+            except Exception:
+                pass
+        # HERMES_FEISHU_CARD_COMPLETE_PATCH_END
         if agent_result.get("already_sent") and not agent_result.get("failed"):
             # The queued-follow-up lane uploads this response's attachments itself; re-scanning here
             # would upload every file a second time.
