@@ -1553,6 +1553,13 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             # what the in-process one-shot took straight from `run_conversation`.
             **{key: result.get(key) for key in _LEDGER_PASSTHROUGH_KEYS if key in result},
         }
+        # HERMES_FEISHU_CARD_PROVIDER_USAGE_BEGIN
+        try:
+            from hermes_feishu_card.hook_runtime import effective_response_model as _hfc_effective_model
+            usage["model"] = _hfc_effective_model(agent) or usage["model"]
+        except Exception:
+            pass
+        # HERMES_FEISHU_CARD_PROVIDER_USAGE_END
         # PATCH-007: expose cumulative token fields and rolling history for the Feishu cache-rate footer.
         usage["input_tokens"] = getattr(agent, "session_input_tokens", 0)
         usage["output_tokens"] = getattr(agent, "session_output_tokens", 0)
