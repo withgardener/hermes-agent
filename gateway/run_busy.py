@@ -143,6 +143,49 @@ class GatewayBusySessionMixin:
         # else: no adapter — leave the head in place so we don't silently drop it.
         return pending_event
 
+    def _requeue_at_depth_cap(
+        self, session_key: Optional[str], source: SessionSource, pending_event: Optional[MessageEvent],
+        pending: Optional[str],
+    ) -> None:
+        """Hand the follow-up the recursion cap refused back to the adapter FIFO, at its head."""
+        adapter = self._delivery_adapter_for(source)
+        if not (adapter and session_key and (pending_event or pending)):
+            return
+        if pending_event is None:
+            # An eventless follow-up (leftover /steer, interrupt text) has no slot entry of its
+            # own; give it one so it survives like any queued turn.
+            prompt, pinned_source = self._pinned_channel_inputs(session_key, None, source, internal=True)
+            pending_event = MessageEvent(text=pending or "", source=pinned_source, channel_prompt=prompt)
+        self._requeue_event_at_front(session_key, pending_event, adapter)
+
+    def _requeue_event_at_front(self, session_key: str, event: MessageEvent, adapter: Any) -> None:
+        """Restore *event* at the FIFO head without dropping a staged next turn.
+
+        The recursion cap can fire after the drain consumed the current head and
+        ``_promote_queued_event`` staged the next item in the adapter slot. Replacing that slot
+        would lose it, so move it back to the front of overflow first.
+        """
+        pending_slot = getattr(adapter, "_pending_messages", None) if adapter is not None else None
+        if pending_slot is None:
+            return
+        staged = pending_slot.get(session_key)
+        if staged is not None:
+            self._session_state(session_key).conversation.queued_events.insert(0, staged)
+        pending_slot[session_key] = event
+    def _take_wake_admitted_before_drain(self, session_key: str, adapter: Any) -> Optional[MessageEvent]:
+        """Pop the first wake admitted before the drain began from the pending slot, else from the
+        overflow FIFO, keeping the slot filled while overflow remains; every other event stays
+        queued. Its producer holds a receipt and will not retry it, so a follow-up ahead of it that
+        the drain rejects must not strand it."""
+        slot = getattr(adapter, "_pending_messages", None)
+        if slot and getattr(slot.get(session_key), "_admitted_before_drain", False) is True:
+            return self._promote_queued_event(session_key, adapter, slot.pop(session_key))
+        overflow = self._overflow_queue(session_key) or []
+        for index, event in enumerate(overflow):
+            if event._admitted_before_drain is True:
+                return overflow.pop(index)
+        return None
+
     def _defer_past_exhaustion_reset(
         self, result: Any, adapter: Any, source: SessionSource, session_key: str, pending_event: MessageEvent,
     ) -> None:
@@ -575,22 +618,11 @@ class GatewayBusySessionMixin:
     async def _send_busy_reply(self, event: MessageEvent, adapter, content: str, *, plain_anchor: bool = False) -> None:
         """Send a busy-path reply anchored to the event (thread metadata included)."""
         reply_anchor = self._reply_anchor_for_event(event)
-        # HERMES_FEISHU_CARD_BUSY_RECALL_PATCH_BEGIN_V1
-        _hfc_recall_result = await adapter._send_with_retry(
+        await adapter._send_with_retry(
             chat_id=event.source.chat_id, content=content,
             reply_to=reply_anchor if plain_anchor else self._busy_reply_to(event, reply_anchor),
             metadata=self._thread_metadata_for_source(event.source, reply_anchor),
         )
-        try:
-            from hermes_feishu_card.hook_runtime import recall_busy_redirect_ack_async as _hfc_recall_ack
-            await _hfc_recall_ack(event, content, _hfc_recall_result)
-        except Exception as _hfc_exc:
-            try:
-                import sys as _hfc_sys
-                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-            except Exception:
-                pass
-        # HERMES_FEISHU_CARD_BUSY_RECALL_PATCH_END_V1
 
     async def _send_busy_drain_notice(self, event: MessageEvent, session_key: str, effective_mode: str) -> None:
         """Busy path while the gateway is restarting/stopping: queue (if allowed) and tell the user."""
@@ -1172,6 +1204,7 @@ class GatewayBusySessionMixin:
                 media_urls=list(getattr(event, "media_urls", []) or []),
                 media_types=list(getattr(event, "media_types", []) or []),
                 media_text_inlined=list(getattr(event, "media_text_inlined", []) or []),
+                media_filenames=list(getattr(event, "media_filenames", []) or []),
                 reply_to_message_id=event.reply_to_message_id, reply_to_text=event.reply_to_text,
                 reply_to_author_id=event.reply_to_author_id,
                 reply_to_author_name=event.reply_to_author_name,
@@ -1599,43 +1632,6 @@ class GatewayBusySessionMixin:
 
         # Register FIRST so a fast button click cannot race the send_slash_confirm return.
         _slash_confirm_mod.register(session_key, confirm_id, command, handler)
-        # HERMES_FEISHU_CARD_SLASH_CONFIRM_PATCH_BEGIN
-        try:
-            from hermes_feishu_card.hook_runtime import request_slash_confirm_from_hermes_locals_async as _hfc_request_slash_confirm
-            from hermes_feishu_card.hook_runtime import complete_command_card_from_hermes_locals_async as _hfc_complete_command_card
-            from hashlib import sha256 as _hfc_sha256
-            _hfc_slash_reply_to = None
-            try:
-                _hfc_slash_reply_to = self._reply_anchor_for_event(event)
-            except Exception:
-                _hfc_slash_reply_to = getattr(event, "message_id", None)
-            _hfc_slash_interaction_seed = (str(session_key) + ":" + str(confirm_id)).encode("utf-8")
-            _hfc_slash_interaction_id = "slash_" + _hfc_sha256(_hfc_slash_interaction_seed).hexdigest()[:16]
-            _hfc_slash_choice = await _hfc_request_slash_confirm({
-                **locals(),
-                "source": source,
-                "chat_id": getattr(source, "chat_id", ""),
-                "conversation_id": session_key,
-                "message_id": _hfc_slash_reply_to,
-                "reply_to_message_id": _hfc_slash_reply_to,
-            }, command=command, title=title, message=message, interaction_id=_hfc_slash_interaction_id)
-            if _hfc_slash_choice in {"once", "always", "cancel"}:
-                _hfc_slash_result = await handler(_hfc_slash_choice)
-                if await _hfc_complete_command_card({
-                    "source": source,
-                    "chat_id": getattr(source, "chat_id", ""),
-                    "conversation_id": session_key,
-                    "message_id": _hfc_slash_reply_to,
-                }, answer=_hfc_slash_result):
-                    return None
-                return _hfc_slash_result
-        except Exception as _hfc_exc:
-            try:
-                import sys as _hfc_sys
-                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-            except Exception:
-                pass
-        # HERMES_FEISHU_CARD_SLASH_CONFIRM_PATCH_END
 
         adapter = self._delivery_adapter_for(source)
         metadata = self._thread_metadata_for_source(source, self._reply_anchor_for_event(event))

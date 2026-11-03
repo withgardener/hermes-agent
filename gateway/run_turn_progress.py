@@ -982,26 +982,6 @@ class GatewayTurnProgressMixin:
         from gateway.run import _prepare_gateway_status_message, _redact_gateway_user_facing_secrets, _send_or_update_status_coro
         from gateway.warning_notifications import is_warning_status, render_notification
         ctx = self._ctx
-        # HERMES_FEISHU_CARD_STATUS_PATCH_BEGIN
-        _hfc_turn_ctx = ctx
-        try:
-            from hermes_feishu_card.hook_runtime import handle_status_from_hermes_locals as _hfc_handle_status
-            if _hfc_turn_ctx._run_still_current():
-                if _hfc_handle_status({
-                    **locals(),
-                    "source": _hfc_turn_ctx.source,
-                    "chat_id": _hfc_turn_ctx._status_chat_id,
-                    "message_id": _hfc_turn_ctx.event_message_id,
-                    "_hfc_loop": _hfc_turn_ctx._loop_for_step,
-                }, event_type=event_type, message=message):
-                    return
-        except Exception as _hfc_exc:
-            try:
-                import sys as _hfc_sys
-                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-            except Exception:
-                pass
-        # HERMES_FEISHU_CARD_STATUS_PATCH_END
         if ctx.mute_notification_reply or not self._status_live():
             return
         prepared = _prepare_gateway_status_message(ctx.source.platform, event_type, message)
@@ -1029,9 +1009,11 @@ class GatewayTurnProgressMixin:
 
 def local_viewer_turn(runner) -> bool:
     """A local route's viewers read the canonical event stream; ``LocalSessionAdapter.send``
-    publishes nothing, so status and notices go to that stream instead."""
-    return (getattr(runner, "_approval_owner", None) is not None
-            and getattr(getattr(runner._ctx, "source", None), "platform", None) == Platform.LOCAL)
+    publishes nothing, so status and notices go to that stream instead. So does a conversation its
+    chat moved past (gateway/session_detached.py): it delivers through that same adapter."""
+    source = getattr(runner._ctx, "source", None) if getattr(runner, "_approval_owner", None) is not None else None
+    from gateway.session_detached import detached_route_of
+    return getattr(source, "platform", None) == Platform.LOCAL or detached_route_of(source) is not None
 
 
 def _viewer_status_kind(kind, text):

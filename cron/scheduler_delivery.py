@@ -949,8 +949,12 @@ def _send_media_via_adapter(
                 method, path_kw = "send_image_file", "image_path"
             else:
                 method, path_kw = "send_document", "file_path"
+            # The voice sender decides bubble vs music-file from ``is_voice`` (Telegram
+            # transcodes non-Opus only when it is set), matching the gateway dispatch
+            # in BasePlatformAdapter._send_one.
+            extra = {"is_voice": _is_voice} if method == "send_voice" else {}
             coro = getattr(adapter, method)(
-                chat_id=chat_id, metadata=metadata, **{path_kw: media_path})
+                chat_id=chat_id, metadata=metadata, **{path_kw: media_path}, **extra)
             future = safe_schedule_threadsafe(coro, loop)
             if future is None:
                 _note_target_error(
@@ -1837,22 +1841,6 @@ def _deliver_result(
     cleaned_delivery_content = _redact_cron_payload(cleaned_delivery_content, "delivery content")
     requested_media = len(media_files)
     media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
-    # HERMES_FEISHU_CARD_CRON_PATCH_BEGIN
-    try:
-        from hermes_feishu_card.hook_runtime import emit_cron_delivery as _hfc_emit_cron
-        _hfc_cron_metadata = {"delivery_kind": "cron"}
-        if _hfc_emit_cron({**locals(), "_hfc_resolved_targets": locals().get("targets", [])}):
-            if media_files:
-                cleaned_delivery_content = ""
-            else:
-                return None
-    except Exception as _hfc_exc:
-        try:
-            import sys as _hfc_sys
-            print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-        except Exception:
-            pass
-    # HERMES_FEISHU_CARD_CRON_PATCH_END
     # Policy-dropped attachments will never be sent on ANY lane — record them in run status.
     _policy_dropped = requested_media - len(media_files)
     policy_drop_errors = [
@@ -1903,6 +1891,14 @@ def _deliver_result(
                     delivery_errors.append(bot_chat_error)
                 if receipt and receipt["status"] == "ambiguous":
                     unverified_targets.append(bot_chat_error)
+            continue
+        if target["platform"] == "local":
+            from gateway.session_cron import deliver_to_local_chat
+            from hermes_constants import get_hermes_home
+            local_error = deliver_to_local_chat(get_hermes_home(), target["chat_id"],
+                                                cleaned_delivery_content, diagnostic=for_failure)
+            if local_error:
+                delivery_errors.append(local_error)
             continue
 
         t = _prepare_target_delivery(

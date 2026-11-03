@@ -1,5 +1,5 @@
 """Agent-turn execution for GatewayRunner: _handle_message_with_agent, _run_agent*, proxy path,
-background tasks, MCP reload. Bound onto ``GatewayRunner`` via the MRO; ``gateway.run`` internals
+MCP reload. Bound onto ``GatewayRunner`` via the MRO; ``gateway.run`` internals
 are imported lazily inside method bodies (import cycle) so ``patch("gateway.run.X")`` still works.
 """
 
@@ -22,12 +22,11 @@ from agent.turn_failure_copy import FAILED_TURN_DISPLAY_KIND, FAILED_TURN_NOTICE
 from contextlib import nullcontext, suppress
 from contextvars import copy_context
 from gateway.config import Platform
-from gateway.media_repair import repair_explicit_computer_use_media_paths
 from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome
 from gateway.platforms.event import MessageEvent
 from gateway.response_filters import (
-    display_kind_for_event, display_metadata_for_event, is_machinery_display_kind, reply_expected_metadata,
-    silence_allowed,
+    display_kind_for_event, display_metadata_for_event, is_machinery_display_kind, persisted_user_metadata_for_event,
+    reply_expected_metadata,
 )
 from gateway.warning_notifications import diagnostic_metadata, diagnostic_turn_muted, diagnostic_wake_muted
 from gateway.session import (
@@ -88,12 +87,6 @@ _CONTEXT_OVERFLOW_ERROR_PHRASES = (
 def _unexpected_silence_reply() -> str:
     """Reply when the model returned only a silence marker for a message that needed an answer."""
     return t("gateway.errors.unexpected_silence")
-
-
-def _bg_prompt_preview(prompt: str, limit: int = 60) -> str:
-    """Short single-line quote of a /bg prompt for its failure notice (the task id means nothing to the user)."""
-    text = " ".join(str(prompt or "").split())
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def is_context_overflow_failure_result(agent_result: dict, history_len: int) -> bool:
@@ -167,11 +160,12 @@ def hygiene_no_commit_reason(agent) -> str:
 
 
 from gateway.run_turn_prepare import GatewayTurnPrepareMixin
+from gateway.run_background import GatewayBackgroundMixin
 from gateway.run_turn_hygiene import GatewayTurnHygieneMixin
 from gateway.run_turn_persistence import GatewayTurnPersistenceMixin
 
 
-class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, GatewayTurnPersistenceMixin):
+class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, GatewayTurnPersistenceMixin):
     """Agent-turn execution for GatewayRunner (see module docstring)."""
 
 
@@ -188,17 +182,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
             return adapter._post_delivery_callbacks.pop(key, None)
         return None
 
-    @staticmethod
-    def _is_intentional_silence(agent_result, response) -> bool:
-        try:
-            from gateway.response_filters import is_intentional_silence_agent_result
-            return is_intentional_silence_agent_result(agent_result, response)
-        except Exception:
-            return False
-
-
-
-
     async def _hmwa_stop_typing_for_turn(self, event, source):
         """Stop the typing indicator (never raises). Slack AI status is scoped to a thread/
         workspace, so preserve the routing metadata used by the response delivery path."""
@@ -214,33 +197,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
 
     async def _handle_message_with_agent(self, event, source, _quick_key: str, run_generation: int):
         """Inner handler that runs under the _running_agents sentinel guard."""
-        # HERMES_FEISHU_CARD_PATCH_BEGIN
-        # HERMES_FEISHU_CARD_STRATEGY gateway_run_013_plus
-        try:
-            from hermes_feishu_card.hook_runtime import emit_from_hermes_locals as _hfc_emit
-            if str(getattr(getattr(source, "platform", None), "value", getattr(source, "platform", None))).lower() == "feishu":
-                from hermes_feishu_card.hook_runtime import queued_followup_source as _hfc_turn_source
-                source = _hfc_turn_source(source, event)
-            from hermes_feishu_card.hook_runtime import handle_hfc_command_from_hermes_locals as _hfc_handle_command
-            _hfc_started_message_id = None
-            try:
-                _hfc_started_message_id = getattr(event, "message_id", None) or self._reply_anchor_for_event(event)
-            except Exception:
-                _hfc_started_message_id = getattr(event, "message_id", None)
-            _hfc_anchor_source = locals().get("source")
-            _hfc_anchor_platform = str(getattr(getattr(_hfc_anchor_source, "platform", None), "value", getattr(_hfc_anchor_source, "platform", None))).lower()
-            if _hfc_started_message_id and _hfc_anchor_source is not None and _hfc_anchor_platform == "feishu":
-                _hfc_anchor_source.message_id = _hfc_started_message_id
-            if _hfc_handle_command({**locals(), "message_id": _hfc_started_message_id}):
-                return None
-            _hfc_emit({**locals(), "message_id": _hfc_started_message_id})
-        except Exception as _hfc_exc:
-            try:
-                import sys as _hfc_sys
-                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-            except Exception:
-                pass
-        # HERMES_FEISHU_CARD_PATCH_END
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
         logger.info(
@@ -303,7 +259,7 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                 persist_user_display_kind=prepared.persist_user_display_kind,
                 reply_expected=event.reply_expected,
                 persist_user_display_metadata={
-                    "gateway_input_owner": prepared.persistence_owner, **display_metadata_for_event(event),
+                    "gateway_input_owner": prepared.persistence_owner, **persisted_user_metadata_for_event(event),
                     **reply_expected_metadata(event.reply_expected), **diagnostic_metadata(event)},
                 message_type=event.message_type,
                 scheduled_heartbeat=bool(getattr(event, "_heartbeat_session_id", None)),
@@ -326,17 +282,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
             await self._hmwa_stop_typing_for_turn(event, source)
 
             if not self._is_session_run_current(_quick_key, run_generation):
-                # HERMES_FEISHU_CARD_STALE_INTERRUPTED_PATCH_BEGIN
-                try:
-                    from hermes_feishu_card.hook_runtime import emit_stale_interrupted_turn_async as _hfc_emit_interrupted
-                    await _hfc_emit_interrupted(locals())
-                except Exception as _hfc_exc:
-                    try:
-                        import sys as _hfc_sys
-                        print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-                    except Exception:
-                        pass
-                # HERMES_FEISHU_CARD_STALE_INTERRUPTED_PATCH_END
                 self._hmwa_discard_stale_result(source, _quick_key, run_generation)
                 return None
 
@@ -368,16 +313,9 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                 hidden_reasoning_incomplete=hidden_reasoning_incomplete,
                 is_context_overflow_failure=is_context_overflow_failure,
             )
-            # HERMES_FEISHU_CARD_TURN_TIMING_PATCH_BEGIN
-            try:
-                agent_result = {**agent_result, "_hfc_turn_seconds": _turn_seconds}
-            except Exception as _hfc_exc:
-                try:
-                    import sys as _hfc_sys
-                    print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-                except Exception:
-                    pass
-            # HERMES_FEISHU_CARD_TURN_TIMING_PATCH_END
+            await self._record_room_silence_decision(
+                session_key, agent_result, _intentional_silence,
+                display_kind=prepared.persist_user_display_kind, reply_expected=event.reply_expected)
             return await self._deliver_turn_response_then_limit_offer(
                 event, source, session_entry, session_key, run_generation,
                 agent_result, agent_messages, response, _footer_line, _intentional_silence,
@@ -491,17 +429,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
             lines.append(t("gateway.session.info_endpoint", url=base_url))
         return "\n".join(lines)
 
-    async def _run_background_task(
-        self, prompt: str, source: SessionSource, task_id: str,
-        event_message_id: Optional[str] = None, media_urls: Optional[list[str]] = None,
-        media_types: Optional[list[str]] = None,
-    ) -> None:
-        """Profile-scoping wrapper around the background agent task (mirrors ``_run_agent``)."""
-        with self._profile_scope_for_source(source):
-            return await self._run_background_task_inner(
-                prompt, source, task_id, event_message_id, media_urls, media_types,
-            )
-
     def _resolve_enabled_toolsets_for_source(
         self, user_config: dict, source: SessionSource, platform_key: str,
     ) -> list:
@@ -527,143 +454,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
         disabled = parse_config_string_list((user_config.get("agent") or {}).get("disabled_toolsets")) or None
         return enabled, disabled
 
-    async def _run_background_task_inner(
-        self, prompt: str, source: SessionSource, task_id: str,
-        event_message_id: Optional[str] = None, media_urls: Optional[list[str]] = None,
-        media_types: Optional[list[str]] = None,
-    ) -> None:
-        """Execute a background agent task and deliver the result to the chat."""
-        from gateway.run import (
-            _checkpoint_agent_kwargs, _current_max_iterations, _load_gateway_config,
-            _platform_config_key,
-        )
-        from run_agent import AIAgent
-        media_urls = media_urls or []
-        media_types = media_types or []
-        adapter = self._delivery_adapter_for(source)
-        if not adapter:
-            logger.warning("No adapter for platform %s in background task %s", source.platform, task_id)
-            return
-        _thread_metadata = self._thread_metadata_for_source(source, event_message_id)
-
-        try:
-            user_config = _load_gateway_config()
-            model, runtime_kwargs = self._resolve_session_agent_runtime(source=source, user_config=user_config)
-            if not runtime_kwargs.get("api_key"):
-                await adapter.send(source.chat_id, t("gateway.background.no_credentials"), metadata=_thread_metadata)
-                return
-
-            platform_key = _platform_config_key(source.platform)
-            enabled_toolsets, disabled_toolsets = self._resolve_turn_toolsets(user_config, source, platform_key)
-            pr = self._provider_routing
-            max_iterations = _current_max_iterations()
-            reasoning_config = self._resolve_session_reasoning_config(source=source, model=model)
-            self._reasoning_config = reasoning_config
-            self._service_tier = self._resolve_session_service_tier(source=source)
-            turn_route = self._resolve_turn_agent_config(prompt, model, runtime_kwargs)
-
-            # Enrich the prompt with image descriptions (same as the main flow).
-            enriched_prompt = prompt
-            image_paths = [
-                path for i, path in enumerate(media_urls)
-                if (media_types[i] if i < len(media_types) else "").startswith("image/")
-            ]
-            if image_paths:
-                try:
-                    enriched_prompt = await self._enrich_message_with_vision(prompt, image_paths)
-                except Exception as e:
-                    logger.warning("Background task vision enrichment failed: %s", e)
-
-            def run_sync():
-                agent = AIAgent(
-                    model=turn_route["model"],
-                    **turn_route["runtime"],
-                    **_checkpoint_agent_kwargs(user_config),
-                    max_iterations=max_iterations,
-                    quiet_mode=True,
-                    verbose_logging=False,
-                    enabled_toolsets=enabled_toolsets,
-                    disabled_toolsets=disabled_toolsets,
-                    reasoning_config=reasoning_config,
-                    service_tier=self._service_tier,
-                    request_overrides=turn_route.get("request_overrides"),
-                    providers_allowed=pr.get("only"),
-                    providers_ignored=pr.get("ignore"),
-                    providers_order=pr.get("order"),
-                    provider_sort=pr.get("sort"),
-                    provider_require_parameters=pr.get("require_parameters", False),
-                    provider_data_collection=pr.get("data_collection"),
-                    session_id=task_id,
-                    platform=platform_key,
-                    **{k: getattr(source, k) for k in (
-                        "user_id", "user_id_alt", "user_name", "chat_id", "chat_name", "chat_type", "thread_id",
-                    )},
-                    session_db=getattr(self._session_db, "_db", self._session_db),
-                    # Reload from disk — do not reuse the startup snapshot.
-                    # See #60955.
-                    fallback_model=self._refresh_fallback_model(),
-                )
-                try:
-                    return agent.run_conversation(user_message=enriched_prompt, task_id=task_id)
-                finally:
-                    self._cleanup_agent_resources(agent)
-
-            result = await self._run_in_executor_with_context(run_sync)
-
-            response = result.get("final_response", "") if result else ""
-            if not response and result and result.get("error"):
-                response = t("gateway.shared.error_prefix", error=result["error"])
-            # Fresh conversation, so history_offset=0: every message in the run belongs to this turn.
-            if response:
-                response = repair_explicit_computer_use_media_paths(response, result.get("messages", []))
-
-            preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
-            header = t("gateway.background.complete_header", preview=preview)
-            images, media_files, text_content = [], [], ""
-            if response:
-                media_files, response = adapter.extract_media(response)
-                media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
-                images, text_content = adapter.extract_images(response)
-            if text_content:
-                await adapter.send(chat_id=source.chat_id, content=header + text_content, metadata=_thread_metadata)
-            elif not images and not media_files:
-                await adapter.send(
-                    chat_id=source.chat_id, content=header + t("gateway.background.no_response"), metadata=_thread_metadata,
-                )
-            for image_url, alt_text in (images or []):
-                with suppress(Exception):
-                    await adapter.send_image(
-                        chat_id=source.chat_id, image_url=image_url, caption=alt_text, metadata=_thread_metadata,
-                    )
-            # Route each media file by type (voice bubble / video / image / document), as the
-            # streaming + kanban paths do.
-            from gateway.platforms.base import should_send_media_as_audio as _should_send_media_as_audio
-            from gateway.run_notifications import _IMAGE_EXTS, _VIDEO_EXTS
-            for media_path, _is_voice in (media_files or []):
-                _ext = os.path.splitext(media_path)[1].lower()
-                with suppress(Exception):
-                    if _should_send_media_as_audio(source.platform, _ext, _is_voice):
-                        await adapter.send_voice(
-                            chat_id=source.chat_id, audio_path=media_path, metadata=_thread_metadata,
-                            is_voice=_is_voice,
-                        )
-                    else:
-                        sender, key = (
-                            (adapter.send_video, "video_path") if _ext in _VIDEO_EXTS
-                            else (adapter.send_image_file, "image_path") if _ext in _IMAGE_EXTS
-                            else (adapter.send_document, "file_path")
-                        )
-                        await sender(chat_id=source.chat_id, metadata=_thread_metadata, **{key: media_path})
-
-        except Exception:
-            logger.exception("Background task %s failed", task_id)
-            # Automatic failure diagnostic (the task produced no requested result to deliver).
-            with suppress(Exception):
-                await adapter.emit_warning(
-                    source.chat_id,
-                    t("gateway.background.failed", preview=_bg_prompt_preview(prompt)),
-                    metadata=_thread_metadata, logical_platform=source.platform,
-                )
 
     def _mcp_reload_refresh_cached_agents(self, multiplex: bool, profile) -> None:
         """Refresh cached agents so existing sessions see new MCP tools on their next turn without
@@ -1798,13 +1588,12 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                         pending_event = None
                         pending = None
 
-        if self._draining and (pending_event or pending):
-            logger.info(
-                "Discarding pending follow-up for session %s during gateway %s",
-                session_key or "?", self._status_action_label(),
-            )
-            pending_event = None
-            pending = None
+        if self._draining and getattr(pending_event, "_admitted_before_drain", False) is not True:
+            if pending_event or pending:
+                logger.info("Discarding pending follow-up for session %s during gateway %s", session_key or "?", self._status_action_label())
+            # Without a result the caller runs nothing next: leave the queue to the adapter.
+            pending_event = self._take_wake_admitted_before_drain(session_key, adapter) if result and adapter and session_key else None
+            pending = (pending_event.text or _build_media_placeholder(pending_event)) if pending_event is not None else None
         return pending_event, pending
 
     async def _run_agent_deliver_first_response(
@@ -1827,58 +1616,11 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
             _sc, first_response, previewed=bool(_delivery_result.get("response_previewed")),
         )
         # Same silence predicate as the normal path, else this branch leaks the literal marker.
-        # HERMES_FEISHU_CARD_QUEUED_COMPLETE_PATCH_BEGIN
-        try:
-            from hermes_feishu_card.hook_runtime import build_event as _hfc_build_event
-            from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_async as _hfc_emit_async
-            from hermes_feishu_card.hook_runtime import should_suppress_native_response as _hfc_should_suppress
-            from hermes_feishu_card.hook_runtime import native_media_only_response as _hfc_media_only
-            if first_response and not _already_streamed:
-                _hfc_turn_ctx = locals().get("turn_ctx")
-                _hfc_source = locals().get("source") or getattr(_hfc_turn_ctx, "source", None)
-                _hfc_message_id = locals().get("event_message_id") or getattr(_hfc_turn_ctx, "event_message_id", None)
-                _hfc_delivery_result = locals().get("_delivery_result")
-                if not isinstance(_hfc_delivery_result, dict):
-                    _hfc_delivery_result = result if isinstance(result, dict) else {}
-                _hfc_completed_locals = {
-                    **locals(),
-                    "source": _hfc_source,
-                    "message_id": _hfc_message_id,
-                    "answer": first_response,
-                    "agent_result": _hfc_delivery_result,
-                    "duration": result.get("duration", 0.0) if isinstance(result, dict) else 0.0,
-                    "model": result.get("model", "") if isinstance(result, dict) else "",
-                    "tokens": {
-                        "input_tokens": result.get("input_tokens", 0) if isinstance(result, dict) else 0,
-                        "output_tokens": result.get("output_tokens", 0) if isinstance(result, dict) else 0,
-                    },
-                    "context": {
-                        "used_tokens": result.get("last_prompt_tokens", 0) if isinstance(result, dict) else 0,
-                        "max_tokens": result.get("context_length", 0) if isinstance(result, dict) else 0,
-                    },
-                }
-                _hfc_completed_event = _hfc_build_event("message.completed", _hfc_completed_locals, preview=True)
-                _hfc_attachments = []
-                _hfc_native_delivery = "allowed"
-                if _hfc_completed_event is not None:
-                    _hfc_completed_data = _hfc_completed_event.get("data", {})
-                    _hfc_attachments = _hfc_completed_data.get("attachments", [])
-                    _hfc_native_delivery = _hfc_completed_data.get("native_delivery", "required" if _hfc_attachments else "allowed")
-                _hfc_card_delivered = await _hfc_emit_async(_hfc_completed_locals, event_name="message.completed")
-                _hfc_platform = getattr(getattr(_hfc_source, "platform", None), "value", getattr(_hfc_source, "platform", None))
-                if str(_hfc_platform).lower() == "feishu" and _hfc_card_delivered and _hfc_native_delivery == "required":
-                    first_response = _hfc_media_only(first_response)
-                if _hfc_should_suppress(_hfc_platform, _hfc_card_delivered, _hfc_attachments, _hfc_native_delivery):
-                    _already_streamed = True
-        except Exception as _hfc_exc:
-            try:
-                import sys as _hfc_sys
-                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-            except Exception:
-                pass
-        # HERMES_FEISHU_CARD_QUEUED_COMPLETE_PATCH_END
+        _silent = False
         if self._is_intentional_silence(_delivery_result, first_response):
-            if silence_allowed(turn_ctx.persist_user_display_kind, turn_ctx.reply_expected):
+            _silent = self._silence_allowed_for_source(
+                turn_ctx.source, turn_ctx.persist_user_display_kind, turn_ctx.reply_expected, _delivery_result)
+            if _silent:
                 logger.info(
                     "Queued follow-up for session %s: suppressing intentional silence marker before continuing.",
                     session_key or "?",
@@ -1891,6 +1633,9 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                 )
                 first_response = _unexpected_silence_reply()
                 _already_streamed = False
+        await self._record_room_silence_decision(
+            session_key, _delivery_result, _silent,
+            display_kind=turn_ctx.persist_user_display_kind, reply_expected=turn_ctx.reply_expected)
         # Failed turns deliver their text but never their attachments (completed-turn parity).
         _deliver_media = not _delivery_result.get("failed")
         if first_response:
@@ -1937,7 +1682,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
         response: Any, result: Any, stream_task: Any,
     ) -> Any:
         """Run the queued / interrupting follow-up as the next turn (recursive ``_run_agent``)."""
-        from gateway.platforms.base import merge_pending_message_event
         from gateway.run import _preserve_queued_followup_history_offset
         source, session_id, session_key, run_generation = (
             turn_ctx.source, turn_ctx.session_id, turn_ctx.session_key, turn_ctx.run_generation,
@@ -1959,11 +1703,7 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                 "Interrupt recursion depth %d reached for session %s — "
                 "queueing message instead of recursing.", _interrupt_depth, session_key,
             )
-            adapter = self._delivery_adapter_for(source)
-            if adapter and pending_event:
-                merge_pending_message_event(adapter._pending_messages, session_key, pending_event)
-            elif adapter and hasattr(adapter, 'queue_message'):
-                adapter.queue_message(session_key, pending)
+            self._requeue_at_depth_cap(session_key, source, pending_event, pending)
             return turn_ctx.result_holder[0] or {"final_response": response, "messages": history}
 
         # Interrupted: discard the response ("Operation interrupted." is noise).
@@ -2060,28 +1800,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
         try:
             await self._refresh_agent_cache_message_count(session_key, session_id)
 
-            # HERMES_FEISHU_CARD_QUEUED_FOLLOWUP_PATCH_BEGIN
-            try:
-                from hermes_feishu_card.hook_runtime import interrupted_turn_locals as _hfc_interrupted_locals
-                from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_async as _hfc_emit_async
-                if pending_event is not None:
-                    _hfc_turn_ctx = locals().get("turn_ctx")
-                    _hfc_followup_message_id = str(getattr(pending_event, "message_id", "") or "")
-                    _hfc_original_message_id = str(locals().get("event_message_id") or getattr(_hfc_turn_ctx, "event_message_id", None) or "")
-                    _hfc_was_interrupted = bool(locals().get("was_interrupted") or (result.get("interrupted") if isinstance(result, dict) else False))
-                    if _hfc_was_interrupted and (_hfc_original_message_id or getattr(source, "_hfc_internal_turn_id", None)):
-                        await _hfc_emit_async(_hfc_interrupted_locals(source, _hfc_original_message_id, result), event_name="message.failed")
-                    if _hfc_followup_message_id or getattr(pending_event, "internal", False) is True:
-                        from hermes_feishu_card.hook_runtime import queued_followup_source as _hfc_queued_source
-                        next_source = _hfc_queued_source(next_source, pending_event)
-                        await _hfc_emit_async({"source": next_source, "event": pending_event, "message": pending_event, "chat_id": getattr(next_source, "chat_id", None), "message_id": _hfc_followup_message_id, "reply_to_message_id": getattr(pending_event, "reply_to_message_id", "") or _hfc_followup_message_id}, event_name="message.started")
-            except Exception as _hfc_exc:
-                try:
-                    import sys as _hfc_sys
-                    print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-                except Exception:
-                    pass
-            # HERMES_FEISHU_CARD_QUEUED_FOLLOWUP_PATCH_END
             followup_result = await self._run_agent(
                 message=next_message, context_prompt=turn_ctx.context_prompt, history=updated_history,
                 source=next_source, session_id=session_id, session_key=next_session_key,
@@ -2095,29 +1813,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                     **display_metadata_for_event(pending_event),
                     **reply_expected_metadata(next_reply_expected), **diagnostic_metadata(pending_event)} or None,
             )
-            # HERMES_FEISHU_CARD_QUEUED_FINAL_PATCH_BEGIN
-            try:
-                from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_async as _hfc_emit_async
-                if pending_event is not None and isinstance(followup_result, dict) and not followup_result.get("_hfc_queued_final_delivered") and not followup_result.get("_hfc_queued_final_attempted"):
-                    followup_result = {**followup_result, "_hfc_queued_final_attempted": True}
-                    _hfc_final_answer = followup_result.get("final_response") or followup_result.get("error") or ""
-                    _hfc_final_metrics = {"duration": followup_result.get("_hfc_turn_seconds"), "model": followup_result.get("model", ""), "tokens": {"input_tokens": followup_result.get("input_tokens", 0), "output_tokens": followup_result.get("output_tokens", 0)}, "context": {"used_tokens": followup_result.get("last_prompt_tokens", 0), "max_tokens": followup_result.get("context_length", 0)}}
-                    _hfc_final_locals = {"source": next_source, "message_id": getattr(pending_event, "message_id", None) or next_message_id, "answer": _hfc_final_answer, "error": followup_result.get("error") or "任务已中断", "agent_result": followup_result, **_hfc_final_metrics}
-                    # A queued follow-up ends with the completed envelope even when it failed. Only that
-                    # branch reads duration/model/tokens/context, and the failure still reaches the card
-                    # because the turn result travels as agent_result (the sidecar derives turn_outcome
-                    # from it). Emitting message.failed here produced a context-free card - no tool count,
-                    # no duration, no model - so it said nothing about where the run stopped.
-                    _hfc_final_event_name = "message.completed"
-                    if await _hfc_emit_async(_hfc_final_locals, event_name=_hfc_final_event_name):
-                        followup_result = {**followup_result, "_hfc_queued_final_delivered": True}
-            except Exception as _hfc_exc:
-                try:
-                    import sys as _hfc_sys
-                    print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-                except Exception:
-                    pass
-            # HERMES_FEISHU_CARD_QUEUED_FINAL_PATCH_END
         except asyncio.CancelledError:
             await _run_followup_processing_hook(
                 _hook_adapter, pending_event, "on_processing_complete", _followup_cancel_outcome(_hook_adapter))
@@ -2141,6 +1836,7 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                 "queued_terminal_inbound_id": next_inbound_id,
                 "queued_terminal_display_kind": next_display_kind,
                 "queued_terminal_reply_expected": next_reply_expected,
+                "queued_terminal_source": next_source,
                 "queued_terminal_notification_category": (
                     (pending_event.metadata or {}).get("notification_category", "result")
                     if pending_event is not None and pending_event.internal else "result"),
@@ -2385,18 +2081,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                 session_key, agent_holder[0], _executor_task_holder[0]
             ):
                 break
-            # HERMES_FEISHU_CARD_TASK_HEARTBEAT_PATCH_BEGIN
-            try:
-                from hermes_feishu_card.hook_runtime import suppress_task_heartbeat_async as _hfc_suppress_heartbeat
-                if await _hfc_suppress_heartbeat(source):
-                    continue
-            except Exception as _hfc_exc:
-                try:
-                    import sys as _hfc_sys
-                    print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-                except Exception:
-                    pass
-            # HERMES_FEISHU_CARD_TASK_HEARTBEAT_PATCH_END
             _elapsed_mins = int((time.time() - _notify_start) // 60)
             # Terse heartbeat by default; the iteration counter is gated on busy_ack_detail.
             _status_detail = ""
@@ -2442,17 +2126,6 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                         _heartbeat_msg_id = str(_notify_res.message_id)
                         if turn_ctx._cleanup_progress:
                             turn_ctx._cleanup_msg_ids.append(_heartbeat_msg_id)
-                    # HERMES_FEISHU_CARD_LONG_RUNNING_RECALL_PATCH_BEGIN
-                    try:
-                        from hermes_feishu_card.hook_runtime import recall_transient_thread_notice_async as _hfc_recall_notice
-                        await _hfc_recall_notice(source, _heartbeat_text, _notify_res)
-                    except Exception as _hfc_exc:
-                        try:
-                            import sys as _hfc_sys
-                            print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-                        except Exception:
-                            pass
-                    # HERMES_FEISHU_CARD_LONG_RUNNING_RECALL_PATCH_END
             except Exception as _ne:
                 logger.debug("Long-running notification error: %s", _ne)
 
@@ -2488,17 +2161,14 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
 
         from run_agent import AIAgent
 
-        disp = self._run_agent_display_settings(source)
+        disp = await asyncio.to_thread(self._run_agent_display_settings, source)  # auth lock + config I/O; scope rides the copied context
         if scheduled_heartbeat:
             # A heartbeat is proactive work: tool chrome, drafts, thinking and periodic
             # liveness notices would create a user-visible ping before its final result is known.
-            # Keep status callbacks intact for approvals and actionable failures.
+            # Keep status callbacks intact for approvals and actionable failures. Interim messages keep the chat's
+            # setting (TurnRunner drops them for a heartbeat): an agent this turn builds takes its mode from it.
             disp = dataclasses.replace(
-                disp,
-                tool_progress_enabled=False,
-                interim_assistant_messages_enabled=False,
-                _thinking_enabled=False,
-                _native_slack_task_cards=False,
+                disp, tool_progress_enabled=False, _thinking_enabled=False, _native_slack_task_cards=False,
                 needs_progress_queue=False,
             )
         turn_ctx, turn_runner, _cleanup_adapter = self._run_agent_build_turn_context(

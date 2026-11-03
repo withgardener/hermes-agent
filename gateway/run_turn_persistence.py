@@ -26,6 +26,7 @@ from gateway.session import (
     SessionSource, _session_key_namespace, build_channel_continuity_note,
     build_session_context,
 )
+from gateway.session_detached import detached_route_of
 from gateway.session_transcript import TranscriptReadError
 from gateway.turn_context import TurnContext
 from gateway.warning_notifications import diagnostic_wake_muted
@@ -54,6 +55,49 @@ def _acp_launch(runner, source) -> bool:
 
 
 class GatewayTurnPersistenceMixin:
+    @staticmethod
+    def _is_intentional_silence(agent_result, response) -> bool:
+        try:
+            from gateway.response_filters import is_intentional_silence_agent_result
+            return is_intentional_silence_agent_result(agent_result, response)
+        except Exception:
+            return False
+
+    async def _record_room_silence_decision(
+        self, session_key, agent_result, silent, *, display_kind=None, reply_expected=None,
+    ):
+        """Bind recovery permission to this exact persisted final and active-turn token.
+
+        A raw persisted marker is not proof that a partial/interrupted turn completed. A crash
+        before this receipt is durable keeps the human safeguard; transcript bytes stay intact.
+        """
+        from gateway.response_filters import is_intentional_silence_response, silence_allowed
+        kind = agent_result.get("queued_terminal_display_kind", display_kind)
+        expected = agent_result.get("queued_terminal_reply_expected", reply_expected)
+        if (not silent or not session_key or silence_allowed(kind, expected)
+                or not is_intentional_silence_response(agent_result.get("final_response"))):
+            return
+        store = self.async_session_store
+        try:
+            entry = await store.lookup_by_session_key(session_key)
+            token = entry.active_turn_token if entry is not None else None
+            if not isinstance(token, str):
+                return
+            history = await store.load_transcript(entry.session_id)
+            # The agent may have saved its final before gateway session metadata was appended.
+            # Match recovery's visible tail rather than the literal last bookkeeping row.
+            last = next((m for m in reversed(history) if m.get("role") not in ("session_meta", "system")), {})
+            if (last.get("role") != "assistant" or last.get("timestamp") is None
+                    or last.get("content") != agent_result.get("final_response")):
+                return
+            await store.set_session_metadata(session_key, "room_silence_decision", {
+                "token": token, "timestamp": last.get("timestamp"), "silent": bool(silent),
+            })
+        except Exception:
+            # The receipt only lets crash recovery honour this silence; without it recovery keeps
+            # the human-turn notice. Live delivery must stay silent rather than become an error.
+            logger.warning("Could not record the room silence decision for %s", session_key, exc_info=True)
+
     async def _hmwa_shape_agent_response(
         self, agent_result, source, history, session_entry, session_key,
         _quick_key, run_generation, _run_start_session_id, _platform_name, _msg_start_time,
@@ -77,11 +121,14 @@ class GatewayTurnPersistenceMixin:
         # A queued (/queue) chain's TERMINAL turn owns the silence verdict, not the event that
         # opened the chain: an internal follow-up, or a message not addressed to the bot, may go
         # silent; any other human one must not.
-        from gateway.response_filters import is_machinery_display_kind, silence_allowed
+        from gateway.response_filters import is_machinery_display_kind, strip_trailing_silence_marker
         from gateway.run_turn import _unexpected_silence_reply
         _silence_kind = agent_result.get("queued_terminal_display_kind", persist_user_display_kind)
         _silence_reply_expected = agent_result.get("queued_terminal_reply_expected", reply_expected)
-        if _intentional_silence and not silence_allowed(_silence_kind, _silence_reply_expected):
+        _silence_source = agent_result.get("queued_terminal_source", source)
+        if _intentional_silence and not self._silence_allowed_for_source(
+            _silence_source, _silence_kind, _silence_reply_expected, agent_result,
+        ):
             logger.warning(
                 "silence marker rejected on a user turn: platform=%s chat=%s",
                 _platform_name, source.chat_id or "unknown",
@@ -90,7 +137,7 @@ class GatewayTurnPersistenceMixin:
             response = _unexpected_silence_reply()
         elif _intentional_silence and not is_machinery_display_kind(_silence_kind):
             logger.debug(
-                "silence marker suppressed on an unaddressed turn: platform=%s chat=%s",
+                "silence marker suppressed on an unaddressed or opted-in turn: platform=%s chat=%s",
                 _platform_name, source.chat_id or "unknown",
             )
 
@@ -121,6 +168,7 @@ class GatewayTurnPersistenceMixin:
         # Normalize empty responses: surface errors, partial failures, and work-without-text.
         # Fix for #18765.
         if not _intentional_silence:
+            response = strip_trailing_silence_marker(response)
             response = _normalize_empty_agent_response(agent_result, response, history_len=len(history))
             response = _sanitize_gateway_final_response(source.platform, response)
 
@@ -340,12 +388,19 @@ class GatewayTurnPersistenceMixin:
                 "session intact; the next message retries normally.",
                 session_entry.session_id if session_entry else "?",
             )
-        elif agent_result.get("compression_exhausted") and getattr(source, "platform", None) == Platform.API_SERVER:
+        elif agent_result.get("compression_exhausted") and (
+                getattr(source, "platform", None) == Platform.API_SERVER or detached_route_of(source)):
             # The caller addresses an API conversation by its id and every API door re-validates that
             # binding (``restore_api_session``): a rotated entry would refuse each later request to it
-            # (``admission_conflict``). The caller gets the typed ``compression_exhausted`` result instead.
-            logger.info("Keeping API session %s after compression exhaustion.",
+            # (``admission_conflict``). A conversation its chat moved past has no route of its own to
+            # reset (gateway/session_detached.py): its app viewer gets the start-fresh guidance a
+            # failed overflow turn gives. Never a reset that did not happen.
+            logger.info("Keeping session %s after compression exhaustion.",
                         session_entry.session_id if session_entry else "?")
+            from gateway.run import _context_overflow_reply
+            guidance = _context_overflow_reply() if detached_route_of(source) else ""
+            if guidance not in (response or ""):
+                response = f"{response}\n\n{guidance}" if response else guidance
         elif agent_result.get("compression_exhausted") and session_entry and session_key:
             if not self._hmwa_defer_exhaustion_reset(session_entry, session_key, source):
                 session_entry = await self._hmwa_rotate_exhausted_session(session_entry, session_key, source)
@@ -423,9 +478,9 @@ class GatewayTurnPersistenceMixin:
         }
         if prepared.persist_user_display_kind:
             _user_entry["display_kind"] = prepared.persist_user_display_kind
-        from gateway.response_filters import display_metadata_for_event
+        from gateway.response_filters import persisted_user_metadata_for_event
         display_metadata = {**({"gateway_input_owner": prepared.persistence_owner} if prepared.persistence_owner else {}),
-                            **display_metadata_for_event(event)}
+                            **persisted_user_metadata_for_event(event)}
         if display_metadata:
             _user_entry["display_metadata"] = display_metadata
         if getattr(event, "message_id", None):
@@ -577,79 +632,13 @@ class GatewayTurnPersistenceMixin:
 
         # Streamed responses still need MEDIA: files delivered (chunks carry the tags verbatim). Never
         # skip when the agent failed: the error text is new content streaming didn't show.
-        # HERMES_FEISHU_CARD_COMPLETE_PATCH_BEGIN
-        try:
-            if str(getattr(source.platform, "value", source.platform)).lower() == "feishu":
-                from hermes_feishu_card.hook_runtime import build_event as _hfc_build_event
-                from hermes_feishu_card.hook_runtime import emit_from_hermes_locals_async as _hfc_emit_async
-                from hermes_feishu_card.hook_runtime import can_stage_exact_base_completion as _hfc_can_stage_exact
-                from hermes_feishu_card.hook_runtime import stage_message_completed_from_hermes_locals_async as _hfc_stage_exact
-                from hermes_feishu_card.hook_runtime import should_suppress_native_response as _hfc_should_suppress
-                from hermes_feishu_card.hook_runtime import native_media_only_response as _hfc_media_only
-                _hfc_completed_message_id = None
-                try:
-                    _hfc_completed_message_id = self._reply_anchor_for_event(event)
-                except Exception:
-                    _hfc_completed_message_id = getattr(event, "message_id", None)
-                _hfc_completed_locals = {
-                    **locals(),
-                    "message_id": _hfc_completed_message_id,
-                    "answer": response,
-                    "duration": agent_result.get("_hfc_turn_seconds"),
-                    "model": agent_result.get("model", ""),
-                    "tokens": {
-                        "input_tokens": agent_result.get("input_tokens", 0),
-                        "output_tokens": agent_result.get("output_tokens", 0),
-                    },
-                    "context": {
-                        "used_tokens": agent_result.get("last_prompt_tokens", 0),
-                        "max_tokens": agent_result.get("context_length", 0),
-                    },
-                }
-                if agent_result.get("_hfc_queued_final_attempted") is True and agent_result.get("_hfc_queued_final_delivered") is not True:
-                    return response
-                if agent_result.get("_hfc_queued_final_delivered") is True:
-                    _hfc_queued_preview = _hfc_build_event("message.completed", _hfc_completed_locals, preview=True)
-                    if _hfc_queued_preview and _hfc_queued_preview.get("data", {}).get("native_delivery") == "required":
-                        return _hfc_media_only(response)
-                    return None
-                from hermes_feishu_card.hook_runtime import admission_completion_mode as _hfc_admission_mode
-                _hfc_admission = _hfc_admission_mode(_hfc_completed_locals)
-                if _hfc_admission == "native":
-                    return response
-                _hfc_exact_staged = False
-                if _hfc_can_stage_exact(_hfc_completed_locals):
-                    _hfc_exact_staged = await _hfc_stage_exact(_hfc_completed_locals)
-                if _hfc_admission == "handoff" and not _hfc_exact_staged:
-                    return response
-                if not _hfc_exact_staged:
-                    _hfc_completed_event = _hfc_build_event("message.completed", _hfc_completed_locals, preview=True)
-                    _hfc_attachments = []
-                    _hfc_native_delivery = "allowed"
-                    if _hfc_completed_event is not None:
-                        _hfc_completed_data = _hfc_completed_event.get("data", {})
-                        _hfc_attachments = _hfc_completed_data.get("attachments", [])
-                        _hfc_native_delivery = _hfc_completed_data.get("native_delivery", "required" if _hfc_attachments else "allowed")
-                    _hfc_card_delivered = await _hfc_emit_async(_hfc_completed_locals, event_name="message.completed")
-                    _hfc_platform = getattr(source.platform, "value", source.platform)
-                    if str(_hfc_platform).lower() == "feishu" and _hfc_card_delivered and _hfc_native_delivery == "required":
-                        response = _hfc_media_only(response)
-                    if _hfc_should_suppress(_hfc_platform, _hfc_card_delivered, _hfc_attachments, _hfc_native_delivery):
-                        return None
-        except Exception as _hfc_exc:
-            try:
-                import sys as _hfc_sys
-                print("[hermes-feishu-card] hook failed: " + _hfc_exc.__class__.__name__ + ": " + str(_hfc_exc), file=_hfc_sys.stderr)
-            except Exception:
-                pass
-        # HERMES_FEISHU_CARD_COMPLETE_PATCH_END
         if agent_result.get("already_sent") and not agent_result.get("failed"):
             # The queued-follow-up lane uploads this response's attachments itself; re-scanning here
             # would upload every file a second time.
             if response and adapter and not agent_result.get("media_already_delivered"):
                 await self._deliver_media_from_response(response, event, adapter)
             # Streaming delivered the body, but the footer was held back (`not already_sent` gate).
-            if _footer_line and adapter:
+            if _footer_line and adapter and not _intentional_silence:
                 try:
                     await adapter.send(source.chat_id, _footer_line, metadata=self._event_thread_metadata(event, source))
                 except Exception as _e:
@@ -723,13 +712,17 @@ class GatewayTurnPersistenceMixin:
                 status_hint = t("gateway.errors.hint_usage_limit")
         elif status_code == 400:
             status_hint = t("gateway.errors.hint_rejected")
-        elif getattr(e, "reason", None) == "launch_credentials_unavailable" and getattr(e, "field", None):
-            # The session's own frozen route credential is gone or changed: name it, not the model.
-            status_hint = f" {e.reason} ({e.field}: {e.detail or 'unavailable'})."
         from gateway.session_results import record_unexecuted_failure
+        if getattr(e, "reason", None) == "launch_credentials_unavailable":
+            # The session's own route key is gone or changed: /retry repeats it, /new is the way out.
+            from agent.turn_failure_copy import launch_credentials_copy
+            return record_unexecuted_failure(launch_credentials_copy(e), 'launch_credentials_unavailable')
+        # A local client (CLI, TUI, Desktop) is the operator at this host: its result carries the
+        # real cause, so its details line is not the chat apology with the log pointer cut off.
+        local_error = f"{type(e).__name__}: {e}"[:500] if source.platform == Platform.LOCAL else None
         return record_unexecuted_failure(self._hmwa_add_failed_turn_notice(
             t("gateway.errors.generic_failed_with_hint", hint=status_hint), PARTIAL_FAILED_TURN_NOTICE,
-        ))
+        ), error=local_error)
 
     def _hmwa_discard_stale_result(self, source, _quick_key, run_generation):
         """A newer run generation superseded this turn: drop its deferred post-delivery callback."""
